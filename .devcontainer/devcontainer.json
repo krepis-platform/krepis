@@ -1,0 +1,21 @@
+{
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+    // 1. Rust 툴체인 설치 (Kernel 및 CLI 개발용)
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "latest",
+      "profile": "minimal"
+    },
+    // 2. Deno 설치 (Core 프레임워크 및 TypeScript 실행용)
+    "ghcr.io/devcontainers-community/features/deno:1": {
+      "version": "latest"
+    },
+    // 3. Protobuf 설치 (KNUL 통신 및 FFI 스키마 정의용)
+    "ghcr.io/devcontainers/features/common-utils:1": {
+      "installZsh": true,
+      "upgradePackages": true
+    }
+  },
+  // 코드스페이스 실행 후 자동으로 수행할 작업 (선택 사항)
+  "postCreateCommand": "rustup component add rust-analyzer clippy"
+}
