@@ -31,7 +31,12 @@ uuid = { version = "1.11", features = ["v4"] }
 deno_core = { version = "0.316.0" }
 # deno_runtime = "0.188.0"
 
+sled = { workspace = true }
+
 krepis-knul = { path = "../krepis-knul" }
 
 [build-dependencies]
 prost-build = "0.13"
+
+[dev-dependencies]
+tempfile = "3.13"
