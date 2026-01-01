@@ -9,11 +9,12 @@ use once_cell::sync::Lazy;
 use krepis_kernel::adapters::storage::SovereignJournal;
 use krepis_kernel::adapters::pool::{SovereignPool, PoolConfig};
 use krepis_kernel::domain::tenant::{TenantMetadata, TenantTier};
+
 static V8_TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[tokio::test]
 async fn test_multi_tenant_isolation() -> Result<()> {
-    let _lock = V8_TEST_MUTEX.lock(); // 💡 테스트 시작 시 락 획득 (끝날 때 자동 해제)
+    let _lock = V8_TEST_MUTEX.lock();
     
     let local = LocalSet::new();
     local.run_until(async {
@@ -89,9 +90,11 @@ async fn test_fault_isolation() -> Result<()> {
         let journal = Arc::new(SovereignJournal::new(temp_dir.path())?);
         let pool = Arc::new(SovereignPool::new(journal.clone(), PoolConfig::default()));
         
+        let panic_tenant_id = "panic-tenant";
+        
         // 1. 패닉 발생 테스트
         {
-            let result = pool.execute_isolated("panic-tenant", |runtime| {
+            let result = pool.execute_isolated(panic_tenant_id, |runtime| {
                 runtime.execute_script(
                     "panic",
                     "throw new Error('Simulated panic');".to_string()
@@ -100,30 +103,37 @@ async fn test_fault_isolation() -> Result<()> {
             }).await;
             
             assert!(result.is_err());
-        } // 여기서 패닉 테넌트의 Isolate가 확실히 드롭됨
+        }
 
         // 💡 핵심: 다음 Isolate를 만들기 전에 스케줄러에게 리소스 정리 기회를 줌
         tokio::task::yield_now().await;
 
-        // 2. 저널 기록 확인
-        assert!(journal.journal_count() > 0);
+        // 2. 저널 기록 확인 - C-001: tenant_id 파라미터 추가
+        // 패닉 테넌트의 격리된 저널에 기록이 있어야 함
+        assert!(journal.journal_count(panic_tenant_id).unwrap() > 0, 
+            "Panic tenant should have journal entries in isolated tree");
         
         // 3. 건강한 테넌트 테스트 (완전히 분리된 스코프)
+        let healthy_tenant_id = "healthy-tenant";
         {
-            let mut guard = pool.acquire("healthy-tenant")?;
+            let mut guard = pool.acquire(healthy_tenant_id)?;
             let res = guard.runtime_mut().execute_script("healthy", "1 + 1");
             assert!(res.is_ok());
-            drop(guard); // 수동 드롭으로 안전 보장
+            drop(guard);
         }
+        
+        // 4. C-001 핵심 검증: 테넌트 간 저널 격리 확인
+        // 건강한 테넌트는 아직 저널에 기록이 없어야 함 (실행만 했고 에러 로그는 없음)
+        assert_eq!(journal.journal_count(healthy_tenant_id).unwrap(), 0,
+            "Healthy tenant should have no error logs in its isolated tree");
 
+        pool.shutdown();
         Ok(())
     }).await
 }
 
 #[tokio::test]
 async fn test_tenant_tier_resource_limits() -> Result<()> {
-    use krepis_kernel::domain::tenant::{TenantMetadata, TenantTier};
-    
     // Free tier
     let free = TenantMetadata::new("free-user".to_string(), TenantTier::Free);
     let free_config = free.resource_config();
@@ -141,8 +151,6 @@ async fn test_tenant_tier_resource_limits() -> Result<()> {
 
 #[test]
 fn test_path_remapping() {
-    use krepis_kernel::domain::tenant::{TenantMetadata, TenantTier};
-    
     let tenant = TenantMetadata::new("secure-tenant".to_string(), TenantTier::Standard);
     
     // Virtual path -> Physical path
@@ -159,52 +167,11 @@ fn test_path_remapping() {
 
 #[test]
 fn test_storage_tree_naming() {
-    use krepis_kernel::domain::tenant::{TenantMetadata, TenantTier};
-    
     let tenant = TenantMetadata::new("prod-123".to_string(), TenantTier::Enterprise);
     
     // Sled tree name follows spec-002 convention
     assert_eq!(tenant.storage_tree, "tenant_db_prod-123");
 }
-
-// #[tokio::test]
-// async fn test_concurrent_tenant_execution() -> Result<()> {
-//     let local = LocalSet::new();
-//     local.run_until(async {
-//         let temp_dir = TempDir::new()?;
-//         let journal = Arc::new(SovereignJournal::new(temp_dir.path())?);
-//         let pool = Arc::new(SovereignPool::new(journal, PoolConfig::default()));
-        
-//         // --- 1. Tenant A Task ---
-//         let pool_a = pool.clone();
-//         let h1 = tokio::task::spawn_local(async move {
-//             {
-//                 let mut guard = pool_a.acquire("tenant-a").expect("Acquire A failed");
-//                 guard.runtime_mut().execute_script("test", "1+1").expect("Script A failed");
-//                 // 💡 블록이 끝나는 시점에 guard가 drop됩니다.
-//             } 
-//         });
-        
-//         h1.await?; // 핸들이 끝날 때까지 대기
-//         tokio::task::yield_now().await; // 💡 V8 스택에서 A가 완전히 Exit 되도록 한 템포 쉽니다.
-
-//         // --- 2. Tenant B Task ---
-//         let pool_b = pool.clone();
-//         let h2 = tokio::task::spawn_local(async move {
-//             {
-//                 let mut guard = pool_b.acquire("tenant-b").expect("Acquire B failed");
-//                 guard.runtime_mut().execute_script("test", "2+2").expect("Script B failed");
-//             }
-//         });
-
-//         h2.await?;
-//         tokio::task::yield_now().await; // B 정리 대기
-        
-//         // 3. 최종 검증
-//         assert_eq!(pool.stats().cached_isolates, 2);
-//         Ok(())
-//     }).await
-// }
 
 #[test]
 fn test_path_remapping_logic() {
@@ -214,4 +181,55 @@ fn test_path_remapping_logic() {
     // Spec-002: safe_remap 이름 확인
     let remapped = tenant.safe_remap("/app/data.txt");
     assert!(remapped.to_str().unwrap().contains("secure-tenant"));
+}
+
+/// C-001: 테넌트별 저널 격리 통합 테스트
+#[tokio::test]
+async fn test_journal_tenant_isolation_via_pool() -> Result<()> {
+    let local = LocalSet::new();
+    local.run_until(async {
+        let temp_dir = TempDir::new()?;
+        let journal = Arc::new(SovereignJournal::new(temp_dir.path())?);
+        let pool = Arc::new(SovereignPool::new(journal.clone(), PoolConfig::default()));
+        
+        // 테넌트 A: 에러 발생
+        let tenant_a = "tenant-alpha";
+        {
+            let _ = pool.execute_isolated(tenant_a, |runtime| {
+                runtime.execute_script("fail", "throw new Error('A failed');".to_string())?;
+                Ok(())
+            }).await;
+        }
+        tokio::task::yield_now().await;
+        
+        // 테넌트 B: 에러 발생
+        let tenant_b = "tenant-beta";
+        {
+            let _ = pool.execute_isolated(tenant_b, |runtime| {
+                runtime.execute_script("fail", "throw new Error('B failed');".to_string())?;
+                Ok(())
+            }).await;
+        }
+        tokio::task::yield_now().await;
+        
+        // C-001 핵심 검증: 각 테넌트의 저널이 완벽히 격리되어 있어야 함
+        let count_a = journal.journal_count(tenant_a).unwrap();
+        let count_b = journal.journal_count(tenant_b).unwrap();
+        
+        assert!(count_a > 0, "Tenant A should have journal entries");
+        assert!(count_b > 0, "Tenant B should have journal entries");
+        
+        // 전체 저널 수 = A + B (각각 독립된 Tree에 저장)
+        let total = journal.total_journal_count();
+        assert_eq!(total, count_a + count_b, 
+            "Total journal count should equal sum of tenant journals");
+        
+        // 테넌트 C: 신규 테넌트는 저널이 없어야 함
+        assert_eq!(journal.journal_count("tenant-gamma").unwrap(), 0,
+            "New tenant should have no journal entries");
+        
+        pool.shutdown();
+
+        Ok(())
+    }).await
 }

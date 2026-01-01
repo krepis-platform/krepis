@@ -1,4 +1,4 @@
-use anyhow::{Result};
+use anyhow::Result;
 use deno_core::{JsRuntime, RuntimeOptions};
 use lru::LruCache;
 use parking_lot::Mutex;
@@ -7,12 +7,11 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info};
+use tracing::info;
 
 use crate::adapters::storage::SovereignJournal;
 use crate::domain::tenant::{TenantMetadata, TenantTier};
 use crate::domain::now_ms;
-// Domain 계층의 순수 정책을 가져옴
 use crate::domain::pool::PoolPolicy;
 use crate::ops::{self, SovereignStats};
 
@@ -82,7 +81,7 @@ impl SovereignPool {
     /// [Command] Isolate 확보
     pub fn acquire(&self, tenant_id: &str) -> Result<RuntimeGuard<'_>> {
         let tenant = self.get_tenant_metadata(tenant_id)?;
-        tenant.validate()?; // Domain 로직 호출
+        tenant.validate()?;
         
         let mut pool = self.pool.lock();
         
@@ -111,7 +110,6 @@ impl SovereignPool {
         let ctx_data = crate::proto::KrepisContext {
             request_id: uuid::Uuid::new_v4().to_string(),
             tenant_id: tenant.tenant_id.clone(),
-            // Domain의 ResourceConfig를 참고하여 우선순위 결정 가능
             priority: 1, 
             timestamp: now_ms(),
             ..Default::default()
@@ -147,14 +145,12 @@ impl SovereignPool {
         let max_idle = self.config.max_idle_time;
         let mut to_remove = Vec::new();
 
-        // 1. 제거할 대상의 ID만 먼저 수집 (Immutable borrow)
         for (tid, pooled) in pool.iter() {
             if PoolPolicy::should_evict(pooled.last_used, max_idle) {
                 to_remove.push(tid.clone());
             }
         }
 
-        // 2. 수집된 ID들을 제거 (Mutable borrow)
         for tid in to_remove {
             pool.pop(&tid);
             info!("🗑️  Evicted: {}", tid);
@@ -189,6 +185,9 @@ impl SovereignPool {
     }
 
     /// [Helper] 특정 테넌트의 런타임을 획득하여 클로저를 실행하고 자동 반환합니다.
+    /// 
+    /// # Spec-002 Compliance: Tenant Isolation
+    /// 에러 발생 시 저널 기록도 테넌트별로 격리됩니다.
     pub async fn execute_isolated<F, R>(&self, tenant_id: &str, f: F) -> Result<R>
     where
         F: FnOnce(&mut deno_core::JsRuntime) -> Result<R>,
@@ -196,14 +195,17 @@ impl SovereignPool {
         let mut guard = self.acquire(tenant_id)?;
         let result = f(guard.runtime_mut());
 
-        // 💡 추가: 결과가 에러일 경우 저널에 자동으로 기록
+        // 💡 C-001 Fix: 에러 저널링 시 tenant_id 전달
         if let Err(ref e) = result {
-            let _ = self.journal.log_transaction(&crate::domain::journal::TransactionLog {
-                timestamp: crate::domain::now_ms(),
-                op_name: format!("{}:panic_caught", tenant_id),
-                request_id: "internal-fault-handler".to_string(),
-                status: crate::domain::journal::LogStatus::Failed,
-            });
+            let _ = self.journal.log_transaction(
+                tenant_id,  // 💡 테넌트 격리 키 전달
+                &crate::domain::journal::TransactionLog {
+                    timestamp: crate::domain::now_ms(),
+                    op_name: format!("{}:panic_caught", tenant_id),
+                    request_id: "internal-fault-handler".to_string(),
+                    status: crate::domain::journal::LogStatus::Failed,
+                }
+            );
             tracing::error!("🛡️ Internal Fault Handled for {}: {}", tenant_id, e);
         }
 
@@ -215,20 +217,12 @@ impl SovereignPool {
         let mut pool = self.pool.lock();
         let mut items = Vec::new();
 
-        // 1. 캐시에 있는 모든 런타임을 꺼냅니다.
-        // pop_lru()는 가장 오래된(Least Recently Used) 것부터 나옵니다.
-        // 예: [A, B] 순서로 나옴
         while let Some((_id, runtime)) = pool.pop_lru() {
             items.push(runtime);
         }
 
-        // 2. 현재 items는 [Oldest, ..., Newest] 순서입니다.
-        // V8 스택은 Newest가 Top에 있으므로, Newest부터 드롭해야 합니다.
-        // 배열을 뒤집습니다. -> [Newest, ..., Oldest]
         items.reverse();
 
-        // 3. items 벡터가 스코프를 벗어나면서 0번 인덱스(Newest)부터 차례로 드롭됩니다.
-        // V8: "편-안"
         info!("🛑 Sovereign Pool shutdown: {} isolates dropped safely.", items.len());
     }
 }
@@ -250,10 +244,7 @@ impl<'a> RuntimeGuard<'a> {
 impl<'a> Drop for RuntimeGuard<'a> {
     fn drop(&mut self) {
         if let Some(mut pooled) = self.runtime.take() {
-            // 💡 현재 시점의 시간을 업데이트하여 반환
             pooled.last_used = std::time::Instant::now();
-            
-            // tenant_id 소유권을 완전히 이전하며 release 호출
             let tid = std::mem::take(&mut self.tenant_id);
             self.pool_ref.release(tid, pooled);
         }
