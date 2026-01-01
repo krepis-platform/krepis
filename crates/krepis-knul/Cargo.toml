@@ -1,0 +1,19 @@
+[package]
+name = "krepis-knul"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "krepis_knul"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+quinn = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

@@ -1,21 +1,25 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "name": "Krepis Sovereign Development Environment",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
   "features": {
-    // 1. Rust 툴체인 설치 (Kernel 및 CLI 개발용)
+    // Rust: 최신 안정 버전 및 분석 도구 포함
     "ghcr.io/devcontainers/features/rust:1": {
-      "version": "latest",
-      "profile": "minimal"
-    },
-    // 2. Deno 설치 (Core 프레임워크 및 TypeScript 실행용)
-    "ghcr.io/devcontainers-community/features/deno:1": {
       "version": "latest"
     },
-    // 3. Protobuf 설치 (KNUL 통신 및 FFI 스키마 정의용)
+    // Deno: 공식 바이너리 설치 방식
     "ghcr.io/devcontainers/features/common-utils:1": {
-      "installZsh": true,
-      "upgradePackages": true
+      "configureZshAsDefaultShell": true
     }
   },
-  // 코드스페이스 실행 후 자동으로 수행할 작업 (선택 사항)
-  "postCreateCommand": "rustup component add rust-analyzer clippy"
+  // 코드스페이스 내에서 Deno를 수동 설치하여 충돌 방지
+  "postCreateCommand": "curl -fsSL https://deno.land/x/install/install.sh | sh && echo 'export DENO_INSTALL=\"$HOME/.deno\"' >> ~/.zshrc && echo 'export PATH=\"$DENO_INSTALL/bin:$PATH\"' >> ~/.zshrc && rustup component add rust-analyzer",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "denoland.vscode-deno",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
 }

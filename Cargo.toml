@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/krepis-kernel",
+    "crates/krepis-knul",
+    "packages/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Krepis Team"]
+license = "Apache-2.0"
+repository = "https://github.com/krepis/krepis"
+
+[workspace.dependencies]
+# Async Runtime
+tokio = { version = "1.42", features = ["full"] }
+
+# Error Handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+prost = "0.13"
+
+# Networking
+hyper = { version = "1.5", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+quinn = "0.11"
+
+# FFI & Memory
+sled = "0.34"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

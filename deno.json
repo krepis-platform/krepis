@@ -1,0 +1,33 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-all --watch packages/core/main.ts",
+    "test": "deno test --allow-all packages/core/tests/",
+    "test:ffi": "deno test --allow-all packages/core/tests/ffi_test.ts",
+    "check": "deno check packages/core/mod.ts",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
+    "build:ffi": "./scripts/build-ffi.sh"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "lib": ["deno.window", "deno.unstable"]
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "include": ["no-explicit-any", "no-unused-vars"]
+    }
+  },
+  "fmt": {
+    "useTabs": false,
+    "lineWidth": 100,
+    "semiColons": true,
+    "singleQuote": false
+  },
+  "imports": {
+    "@krepis/core": "./packages/core/mod.ts"
+  }
+}

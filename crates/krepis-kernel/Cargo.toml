@@ -1,0 +1,32 @@
+[package]
+name = "krepis-kernel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "krepis_kernel"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "krepis-kernel"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+hyper = { workspace = true }
+hyper-util = {workspace = true}
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+prost = { workspace = true }
+bytes = "1.7"
+uuid = { version = "1.11", features = ["v4"] }
+
+krepis-knul = { path = "../krepis-knul" }
+
+[build-dependencies]
+prost-build = "0.13"

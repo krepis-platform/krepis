@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package krepis.core;
+
+message KrepisContext {
+  string request_id = 1;
+  string tenant_id = 2;
+  uint32 priority = 3;
+  bool is_turbo_mode = 4;
+  string trace_id = 5;
+  int64 timestamp = 6;
+  map<string, string> metadata = 7;
+}
+
+message KnulConfig {
+  bool enable_0rtt = 1;
+  uint32 compression_level = 2;
+  uint32 max_streams = 3;
+}
+
+message InitializeRequest {
+  KrepisContext context = 1;
+  KnulConfig config = 2;
+}
+
+message InitializeResponse {
+  bool success = 1;
+  string error_message = 2;
+}
