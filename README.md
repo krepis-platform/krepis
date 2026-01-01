@@ -1,6 +1,6 @@
 # Krepis: Sovereign AI-Native ADaaS Platform
 
-> Architecture Development as a Service - v1.5.0 (The Deterministic Sovereign)
+> Architecture Development as a Service - v2.0.0 (The Sovereign Kernel)
 
 ## 🎯 Core Philosophy
 
@@ -9,6 +9,7 @@
 - **Systemic Rigidity**: Rust + Deno for deterministic runtime
 - **Fractal Intelligence**: Master-Expert-Sub AI legion architecture
 - **Explicit Context**: Zero implicit state propagation
+- **Sovereign Kernel**: Rust controls Deno, not vice versa
 
 ## 🏗️ Architecture Overview
 
@@ -19,11 +20,18 @@ krepis/
 ├── Cargo.toml              # Rust workspace root
 ├── deno.json               # Deno runtime config
 ├── crates/
-│   ├── krepis-kernel/      # Hyper-Pingora native server (Rust binary)
+│   ├── krepis-kernel/      # 🆕 Sovereign Kernel Host (Rust embeds Deno)
+│   │   ├── src/
+│   │   │   ├── main.rs     # Tokio async kernel
+│   │   │   ├── lib.rs      # FFI exports
+│   │   │   └── ops.rs      # Rust-JS bridge operations
+│   │   ├── proto/          # Protobuf schemas
+│   │   └── tests/          # Integration tests
 │   └── krepis-knul/        # KNUL protocol engine (Rust library)
 └── packages/
     ├── cli/                # Sovereign Master CLI (Rust binary)
     └── core/               # Trinity Framework Core (TypeScript/Deno)
+        └── src/native/     # FFI bindings for Rust
 ```
 
 ## 🚀 Quick Start
@@ -31,48 +39,77 @@ krepis/
 ### Prerequisites
 
 - Rust 1.75+ (latest stable)
-- Deno 2.0+
+- Cargo
 - Git
 
-### Installation
+### Build & Run Sovereign Kernel
 
 ```bash
 # Clone repository
 git clone https://github.com/krepis/krepis.git
 cd krepis
 
-# Build Rust components
-cargo build --workspace
+# Build Sovereign Kernel
+./scripts/build-sovereign.sh
 
-# Check TypeScript core
-deno task check
+# Run demo
+./scripts/demo-sovereign.sh
 
-# Run tests
-cargo test --workspace
-deno task test
-```
-
-## 🔧 Development
-
-### Start Kernel (Native Server)
-
-```bash
+# Or manually
 cargo run --package krepis-kernel
 ```
 
-### Start Core (Standard Mode - TS Simulator)
+### Expected Output
 
-```bash
-deno task dev
+```
+🚀 Krepis Sovereign Kernel Host v2.0.0
+⚡ Initializing Rust Control Plane...
+✅ Context created: RequestID=<uuid>
+🔒 Turbo Mode: true
+🎯 Deno Isolate spawned - Rust maintains sovereignty
+🔷 JavaScript Execution Plane Active
+📦 Context received from Rust: <bytes> bytes
+🔒 Read permission for /tmp/krepis/: true
+✅ JavaScript bootstrap executed
+🎉 Sovereign Kernel Host operational
 ```
 
-### Build CLI
+## 📐 Architecture Principles
 
-```bash
-cargo build --package krepis-cli --release
+### 1. Control Plane vs Execution Plane
+
+```
+┌────────────────────────────┐
+│   Rust Control Plane       │  ← Owns context, permissions, I/O
+│   (Sovereign Authority)    │
+└──────────┬─────────────────┘
+           │ Op System
+           ↓
+┌────────────────────────────┐
+│   Deno Execution Plane     │  ← Runs JS, uses Rust-provided ops
+│   (Controlled Worker)      │
+└────────────────────────────┘
 ```
 
-## 📐 Trinity Pattern Enforcement
+### 2. Explicit Context Propagation
+
+Every operation receives Protobuf-serialized context:
+
+```rust
+// Rust creates
+let ctx = KrepisContext {
+    request_id: uuid::new_v4(),
+    is_turbo_mode: true,
+    priority: 10,
+};
+```
+
+```javascript
+// JS receives
+const ctx = Deno.core.ops.op_get_context();
+```
+
+### 3. Trinity Pattern Enforcement
 
 All business logic follows:
 
@@ -88,55 +125,37 @@ All business logic follows:
 cargo test --workspace
 ```
 
-### TypeScript Tests
+### Integration Tests
 
 ```bash
-deno test --allow-all packages/core/tests/
+cargo test --package krepis-kernel --test sovereign_test
 ```
 
-### Coverage
+## 🔐 Security Model
 
-```bash
-# Rust coverage (requires cargo-tarpaulin)
-cargo tarpaulin --workspace --out Html
+- **Default Deny**: All operations denied unless explicitly allowed
+- **Rust-Controlled I/O**: No direct file/network access from JS
+- **Permission System**: `op_check_permission` validates every request
+- **No Implicit State**: Zero global mutable state
 
-# Deno coverage
-deno test --coverage=./coverage
-deno coverage ./coverage
-```
+## 📊 Key Features
 
-## 🔐 Core Principles
+- ✅ Rust embeds Deno (not Node.js)
+- ✅ Zero-copy FFI via `deno_core`
+- ✅ Protobuf context serialization
+- ✅ Explicit permission system
+- ✅ Sovereign metrics tracking
+- ✅ Async/await in both Rust and JS
 
-### Explicit Context Propagation
+## 🛠️ Development
 
-Every async function receives `ctx: KrepisContext`:
+### Add New Operations
 
-```typescript
-async function processRequest(ctx: KrepisContext, data: RequestData) {
-  // All async operations must receive ctx explicitly
-}
-```
+1. Define in `crates/krepis-kernel/src/ops.rs`
+2. Register in extension
+3. Call from JavaScript via `Deno.core.ops`
 
-### Zero-Copy FFI
-
-Rust ↔ TypeScript data exchange via Deno FFI:
-
-```typescript
-// Shared memory pointer - no copying
-const buffer = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(ptr, size));
-```
-
-## 📊 Build Targets
-
-- **Standard Mode**: Pure TypeScript simulator for development
-- **Turbo Mode**: Rust native engine for production
-
-## 🛡️ Quality Standards
-
-- Test Coverage: ≥80% (enforced in CI)
-- Zero `any` types in TypeScript
-- `#![deny(clippy::pedantic)]` in Rust
-- No circular dependencies
+See `crates/krepis-kernel/SOVEREIGN.md` for details.
 
 ## 📝 License
 
@@ -145,9 +164,8 @@ Apache-2.0
 ## 🌐 Links
 
 - Documentation: https://docs.krepis.dev
-- API Reference: https://api.krepis.dev
-- Community: https://discord.gg/krepis
+- Sovereign Kernel Guide: [SOVEREIGN.md](crates/krepis-kernel/SOVEREIGN.md)
 
 ---
 
-**Status**: Phase 1 - The Sovereign Genesis (v1.5.0)
+**Status**: Phase 2 - Sovereign Kernel Host (v2.0.0) ✅

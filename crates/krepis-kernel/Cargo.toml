@@ -18,6 +18,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 hyper = { workspace = true }
 hyper-util = {workspace = true}
 tracing = { workspace = true }
@@ -25,6 +26,10 @@ tracing-subscriber = { workspace = true }
 prost = { workspace = true }
 bytes = "1.7"
 uuid = { version = "1.11", features = ["v4"] }
+
+# Deno Runtime Embedding
+deno_core = { version = "0.316.0" }
+# deno_runtime = "0.188.0"
 
 krepis-knul = { path = "../krepis-knul" }
 

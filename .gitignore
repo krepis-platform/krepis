@@ -16,7 +16,7 @@ coverage/
 .idea/
 *.swp
 *.swo
-
+target
 # OS
 .DS_Store
 Thumbs.db
