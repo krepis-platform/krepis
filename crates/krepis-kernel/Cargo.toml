@@ -33,7 +33,12 @@ deno_core = { version = "0.316.0" }
 
 sled = { workspace = true }
 
+# Multi-tenant Pooling
+lru = "0.12"
+parking_lot = "0.12"
+
 krepis-knul = { path = "../krepis-knul" }
+once_cell = "1.21.3"
 
 [build-dependencies]
 prost-build = "0.13"

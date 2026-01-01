@@ -2,27 +2,20 @@ use deno_core::{JsRuntime, RuntimeOptions, PollEventLoopOptions};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::Arc;
-
-mod proto {
-    include!(concat!(env!("OUT_DIR"), "/krepis.core.rs"));
-}
-
-#[path = "../src/ops.rs"]
-mod ops;
-#[path = "../src/journal.rs"]
-mod journal;
-
-use proto::KrepisContext;
 use prost::Message;
-use journal::{SovereignJournal, TransactionLog, LogStatus};
-use ops::SovereignStats;
+
+// 1. Trinity 계층에서 필요한 요소들을 정식으로 가져옵니다.
+use krepis_kernel::proto::KrepisContext;
+use krepis_kernel::domain::journal::{TransactionLog, LogStatus};
+use krepis_kernel::adapters::storage::SovereignJournal;
+use krepis_kernel::ops::{self, SovereignStats};
 
 deno_core::extension!(
     krepis_test,
     ops = [
-        ops::op_get_context,
-        ops::op_check_permission,
-        ops::op_increment_stats,
+        ops::bridge::op_get_context,
+        ops::bridge::op_check_permission,
+        ops::bridge::op_increment_stats,
     ],
 );
 
@@ -66,9 +59,19 @@ async fn test_sovereign_runtime_creation() {
 async fn test_permission_system() {
     let ctx_buffer: Rc<Vec<u8>> = Rc::new(vec![]);
     
+    // 💡 추가: Permission 시스템이 참조할 테넌트 메타데이터와 저널 주입
+    use krepis_kernel::domain::tenant::{TenantMetadata, TenantTier};
+    use tempfile::TempDir;
+    
+    let temp_dir = TempDir::new().unwrap();
+    let journal = Arc::new(SovereignJournal::new(temp_dir.path()).unwrap());
+    let tenant_meta = TenantMetadata::new("test-tenant".to_string(), TenantTier::Standard);
+
     let mut ext = krepis_test::init_ops();
     ext.op_state_fn = Some(Box::new(move |state| {
         state.put(ctx_buffer.clone());
+        state.put(journal.clone());      // 저널 필요
+        state.put(tenant_meta.clone()); // 👈 패닉의 원인이었던 녀석!
     }));
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
@@ -76,6 +79,7 @@ async fn test_permission_system() {
         ..Default::default()
     });
 
+    // 이제 op_check_permission이 실행될 때 state에서 tenant_meta를 찾을 수 있습니다.
     let result = runtime.execute_script(
         "permission_test",
         r#"
