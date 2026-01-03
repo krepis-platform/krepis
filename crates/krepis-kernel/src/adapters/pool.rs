@@ -7,12 +7,14 @@ use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{info, warn};
+use tracing::{info, warn, error};
+use deno_core::v8;
 
 use crate::adapters::storage::SovereignJournal;
-use crate::domain::now_ms;
+use crate::domain::{LogStatus, TransactionLog, now_ms};
 use crate::domain::pool::PoolPolicy;
 use crate::domain::tenant::{TenantError, TenantMetadata, TenantTier};
 use crate::ops::{self, SovereignStats};
@@ -89,6 +91,57 @@ impl Default for PoolConfig {
             default_tier: TenantTier::Free,
             acquire_timeout: Duration::from_secs(5),
         }
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// C-003: V8 Termination Handle (Watchdog 지원)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// V8 Isolate 강제 종료 핸들
+/// 
+/// # Safety
+/// V8의 `terminate_execution()`은 다른 스레드에서 호출해도 안전합니다.
+/// 이 핸들은 Watchdog 타이머가 실행 시간 초과 시 Isolate를 중단하는 데 사용됩니다.
+#[derive(Clone)]
+pub struct V8TerminationHandle {
+    isolate_ptr: *mut v8::Isolate,
+    terminated: Arc<AtomicBool>,
+}
+
+// V8 Isolate 포인터는 terminate_execution 호출에 한해 스레드 안전함
+unsafe impl Send for V8TerminationHandle {}
+unsafe impl Sync for V8TerminationHandle {}
+
+impl V8TerminationHandle {
+    /// 새로운 Termination Handle 생성
+    ///
+    /// # Safety
+    /// 'runtime'은 이 핸들의 수명 동안 유효해야 합니다.
+    fn new(runtime: &mut JsRuntime) -> Self {
+        Self {
+            isolate_ptr: runtime.v8_isolate().as_mut() as *mut v8::Isolate,
+            terminated: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// V8 Isolate 실행 강제 중단
+    /// 
+    /// # Spec-003 Compliance: Execution Guard (Watchdog)
+    /// 이 메서드는 Watchdog 타이머에서 호출되어 무한 루프를 방지합니다.
+    pub fn terminate(&self) {
+        if !self.terminated.swap(true, Ordering::SeqCst) {
+            // Safety: V8의 terminate_execution은 스레드 안전함
+            unsafe {
+                (*self.isolate_ptr).terminate_execution();
+            }
+            warn!("⚡ V8 Isolate terminated by Watchdog");
+        }
+    }
+    
+    /// 이 Isolate가 종료되었는지 확인
+    pub fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::SeqCst)
     }
 }
 
@@ -354,6 +407,10 @@ impl SovereignPool {
     /// 3. Isolate에서 클로저 실행
     /// 4. 결과와 무관하게 permit 자동 반환 (Drop)
     /// 
+    /// # Spec-003 Compliance: Execution Guard (Watchdog)
+    /// 테넌트 티어별 `max_execution_time`을 초과하면 V8 Isolate가 강제 중단됩니다.
+    /// 중단된 Isolate는 상태가 불안정하므로 풀에 반환하지 않고 폐기합니다.
+    /// 
     /// # Error Handling
     /// 
     /// - `TenantError::QuotaExceeded`: 정보 제공용 (즉시 실패 시)
@@ -376,13 +433,13 @@ impl SovereignPool {
         // 1. [C-002] 리소스 정책 조회
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         let tenant = self.get_tenant_metadata(tenant_id)?;
-        let max_concurrent = tenant.resource_config().max_concurrent_requests;
+        let config = tenant.resource_config();
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // 2. [C-002] Bulkhead: Permit 획득 (RAII)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        let semaphore = self.get_or_create_semaphore(tenant_id, max_concurrent);
-        let _permit = self.acquire_permit(tenant_id, semaphore, max_concurrent).await?;
+        let semaphore = self.get_or_create_semaphore(tenant_id, config.max_concurrent_requests);
+        let _permit = self.acquire_permit(tenant_id, semaphore, config.max_concurrent_requests).await?;
         
         // 💡 RAII Safety: `_permit`이 스코프를 벗어나면 자동으로 반환됩니다.
         //    패닉이 발생해도 Drop이 호출되어 permit이 반환됩니다.
@@ -391,25 +448,73 @@ impl SovereignPool {
         // 3. Isolate 확보 및 실행
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         let mut guard = self.acquire(tenant_id)?;
-        let result = f(guard.runtime_mut());
+        let term_handle = V8TerminationHandle::new(guard.runtime_mut());
+        let term_handle_clone = term_handle.clone();
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // 4. [C-001] 에러 저널링 (테넌트 격리)
+        // 4. [C-003] Watchdog 타이머 생성
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        let watchdog_tenant_id = tenant_id.to_string();
+        let watchdog = tokio::spawn(async move {
+            tokio::time::sleep(config.max_execution_time).await;
+            // 타임아웃 도달 - V8 Isolate 강제 종료
+            warn!("⏰ Watchdog triggered for tenant: {} (limit: {:?})", 
+                watchdog_tenant_id, config.max_execution_time);
+            term_handle_clone.terminate();
+        });
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // 5. 실행
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        let start_time = Instant::now();
+        let result = f(guard.runtime_mut());
+        let elapsed = start_time.elapsed();
+
+        // 타이머 종료
+        watchdog.abort();
+
+        // 7. [C-003 결과 처리] 타임아웃 발생 시 Isolation 폐기
+        if term_handle.is_terminated() {
+            // 중단된 Isolate는 불안정 상태이므로 풀에 반환하지 않음
+            guard.leak();
+
+            // 저널에 타임아웃 기록
+            let _ = self.journal.log_transaction(
+                tenant_id,
+                &TransactionLog {
+                    timestamp: now_ms(),
+                    op_name: format!("{}:execution_timeout", tenant_id),
+                    request_id: format!("watchdog-{}", uuid::Uuid::new_v4()),
+                    status: LogStatus::Failed,
+                }
+            );
+
+            error!("💥 Tenant {} execution terminated after {:?} (limit: {:?})", 
+                tenant_id, elapsed, config.max_execution_time);
+            
+            return Err(TenantError::ExecutionTimeout {
+                tenant_id: tenant_id.to_string(),
+                limit_ms: config.max_execution_time.as_millis() as u64,
+                elapsed_ms: elapsed.as_millis() as u64,
+            }.into());
+        }
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // 7. 일반 에러 처리 (C-001 호환)
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         if let Err(ref e) = result {
             let _ = self.journal.log_transaction(
                 tenant_id,
-                &crate::domain::journal::TransactionLog {
-                    timestamp: crate::domain::now_ms(),
+                &TransactionLog {
+                    timestamp: now_ms(),
                     op_name: format!("{}:execution_error", tenant_id),
                     request_id: "internal-fault-handler".to_string(),
-                    status: crate::domain::journal::LogStatus::Failed,
-                },
+                    status: LogStatus::Failed,
+                }
             );
-            tracing::error!("🛡️ Execution failed for {}: {}", tenant_id, e);
+            error!("🛡️ Execution error for {}: {}", tenant_id, e);
         }
 
-        // _permit이 여기서 drop되어 자동으로 세마포어에 반환됨
         result
     }
 

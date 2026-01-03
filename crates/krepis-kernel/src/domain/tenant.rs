@@ -128,6 +128,18 @@ pub enum TenantError {
     /// 세마포어 획득 타임아웃
     #[error("Tenant {0} request timed out waiting for execution slot")]
     AcquireTimeout(String),
+
+    /// C-003: 실행 시간 초과 (Watchdog에 의해 강제 중단)
+    /// 
+    /// # Spec-003 Compliance: Execution Guard (Watchdog)
+    /// 테넌트 등급별 `max_execution_time` 초과 시 V8 Isolate가 강제 중단됩니다.
+    /// 중단된 Isolate는 상태가 불안정하므로 풀에 반환되지 않고 폐기됩니다.
+    #[error("Tenant {tenant_id} execution terminated: exceeded {limit_ms}ms time limit (ran for {elapsed_ms}ms)")]
+    ExecutionTimeout {
+        tenant_id: String,
+        limit_ms: u64,
+        elapsed_ms: u64,
+    },
 }
 
 #[cfg(test)]
@@ -166,5 +178,18 @@ mod tests {
             max: 5,
         };
         assert!(err.to_string().contains("exceeded concurrent request quota"));
+    }
+
+    #[test]
+    fn test_execution_timeout_error() {
+        let err = TenantError::ExecutionTimeout {
+            tenant_id: "slow-tenant".to_string(),
+            limit_ms: 100,
+            elapsed_ms: 150,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("execution terminated"));
+        assert!(msg.contains("100ms"));
+        assert!(msg.contains("150ms"));
     }
 }
