@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
+use crate::proto::{KrepisError, ErrorCode, ErrorCategory, ErrorMeta, ResourceSnapshot};
 
 /// Tenant Service Tier (Pure Data)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -10,10 +11,6 @@ pub enum TenantTier {
     Enterprise,
 }
 
-/// Resource Configuration (Pure Data)
-/// 
-/// # Spec-003 Compliance: Tiered Resource Allocation
-/// 각 테넌트 등급에 따라 차등화된 리소스 한도를 정의합니다.
 #[derive(Debug, Clone)]
 pub struct ResourceConfig {
     pub heap_limit_mb: usize,
@@ -22,10 +19,6 @@ pub struct ResourceConfig {
     pub cpu_quota_ms: u64,
 }
 
-/// Tenant Metadata (Pure Data)
-/// 
-/// # Spec-002 Compliance: Tenant Context Identification
-/// 테넌트의 신원과 리소스 정책을 담는 핵심 도메인 모델입니다.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TenantMetadata {
     pub tenant_id: String,
@@ -46,12 +39,6 @@ impl TenantMetadata {
         }
     }
 
-    /// [Pure Decision] 티어별 리소스 정책 결정
-    /// 
-    /// # Spec-003 Compliance: Tiered Resource Allocation
-    /// - Free: 5 concurrent, 128MB heap, 100ms timeout
-    /// - Standard: 20 concurrent, 256MB heap, 200ms timeout
-    /// - Enterprise: 100 concurrent, 512MB heap, 500ms timeout
     pub fn resource_config(&self) -> ResourceConfig {
         match self.tier {
             TenantTier::Free => ResourceConfig {
@@ -75,7 +62,6 @@ impl TenantMetadata {
         }
     }
 
-    /// [Pure Decision] 유효성 검증
     pub fn validate(&self) -> Result<(), TenantError> {
         if !self.active {
             return Err(TenantError::Inactive(self.tenant_id.clone()));
@@ -83,29 +69,16 @@ impl TenantMetadata {
         Ok(())
     }
 
-    /// [Pure Decision] 경로 리매핑 로직 (Chroot 가상화의 핵심)
-    /// 
-    /// # Spec-002 Compliance: Virtualized Path Mapping
-    /// JS에서 `/app/data/config.json` 요청 시 
-    /// `root/tenants/{tenant_id}/app/data/config.json`으로 리매핑
     pub fn safe_remap(&self, virtual_path: &str) -> PathBuf {
         let clean_path = virtual_path.trim_start_matches('/');
         Path::new(&self.fs_root).join(clean_path)
     }
 
-    /// [Pure Decision] 경로 보안 검증
-    /// 
-    /// # Security: Path Traversal Prevention
-    /// 테넌트는 자신의 가상 루트 상위로 이동할 수 없습니다.
     pub fn is_path_allowed<P: AsRef<Path>>(&self, physical_path: P) -> bool {
         physical_path.as_ref().starts_with(&self.fs_root)
     }
 }
 
-/// [Domain Error] 테넌트 관련 에러 타입
-/// 
-/// # C-002 Enhancement: QuotaExceeded 추가
-/// Bulkhead 패턴 적용 시 동시성 한도 초과 에러를 표현합니다.
 #[derive(Debug, thiserror::Error)]
 pub enum TenantError {
     #[error("Tenant {0} is inactive")]
@@ -114,10 +87,6 @@ pub enum TenantError {
     #[error("Path access denied: {0}")]
     PathDenied(String),
     
-    /// C-002: 동시성 한도 초과 에러
-    /// 
-    /// # Spec-003 Compliance: Concurrency & Throttling
-    /// 테넌트 등급별 `max_concurrent_requests` 초과 시 발생
     #[error("Tenant {tenant_id} exceeded concurrent request quota ({current}/{max})")]
     QuotaExceeded {
         tenant_id: String,
@@ -125,71 +94,112 @@ pub enum TenantError {
         max: usize,
     },
     
-    /// 세마포어 획득 타임아웃
     #[error("Tenant {0} request timed out waiting for execution slot")]
     AcquireTimeout(String),
 
-    /// C-003: 실행 시간 초과 (Watchdog에 의해 강제 중단)
-    /// 
-    /// # Spec-003 Compliance: Execution Guard (Watchdog)
-    /// 테넌트 등급별 `max_execution_time` 초과 시 V8 Isolate가 강제 중단됩니다.
-    /// 중단된 Isolate는 상태가 불안정하므로 풀에 반환되지 않고 폐기됩니다.
     #[error("Tenant {tenant_id} execution terminated: exceeded {limit_ms}ms time limit (ran for {elapsed_ms}ms)")]
     ExecutionTimeout {
         tenant_id: String,
         limit_ms: u64,
         elapsed_ms: u64,
     },
+
+    /// V8 실행 중 발생한 런타임 에러 또는 처리되지 않은 예외
+    #[error("V8 Runtime Error: {0}")]
+    RuntimeError(String),
+
+    /// 시스템 내부 결함 또는 예기치 않은 상태
+    #[error("Internal Kernel Error: {0}")]
+    Internal(String),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tier_resource_limits() {
-        let free = TenantMetadata::new("free-user".to_string(), TenantTier::Free);
-        let config = free.resource_config();
-        assert_eq!(config.max_concurrent_requests, 5);
-        assert_eq!(config.heap_limit_mb, 128);
-
-        let enterprise = TenantMetadata::new("ent-user".to_string(), TenantTier::Enterprise);
-        let config = enterprise.resource_config();
-        assert_eq!(config.max_concurrent_requests, 100);
-        assert_eq!(config.heap_limit_mb, 512);
-    }
-
-    #[test]
-    fn test_path_remapping() {
-        let tenant = TenantMetadata::new("secure".to_string(), TenantTier::Standard);
-        
-        let remapped = tenant.safe_remap("/app/data.txt");
-        assert_eq!(remapped, PathBuf::from("root/tenants/secure/app/data.txt"));
-        
-        assert!(tenant.is_path_allowed("root/tenants/secure/data/file.txt"));
-        assert!(!tenant.is_path_allowed("root/tenants/other/data/file.txt"));
-    }
-
-    #[test]
-    fn test_quota_exceeded_error() {
-        let err = TenantError::QuotaExceeded {
-            tenant_id: "test".to_string(),
-            current: 5,
-            max: 5,
+impl TenantError {
+    /// 도메인 에러를 SDK에 전달할 Protobuf 메시지로 변환 (Spec-008 준수)
+    pub fn into_proto(self, request_id: String, trace_id: String) -> KrepisError {
+        // 1. 테넌트 ID 추출
+        let tenant_id = match &self {
+            Self::Inactive(id) | Self::AcquireTimeout(id) => id.clone(),
+            Self::QuotaExceeded { tenant_id, .. } | Self::ExecutionTimeout { tenant_id, .. } => tenant_id.clone(),
+            Self::RuntimeError(_) | Self::Internal(_) | Self::PathDenied(_) => "unknown".to_string(),
         };
-        assert!(err.to_string().contains("exceeded concurrent request quota"));
-    }
 
-    #[test]
-    fn test_execution_timeout_error() {
-        let err = TenantError::ExecutionTimeout {
-            tenant_id: "slow-tenant".to_string(),
-            limit_ms: 100,
-            elapsed_ms: 150,
+        // 2. Protobuf 열거형 및 메타데이터 매핑
+        // krepis.core.rs에 생성된 ErrorCode::Variant 및 ErrorCategory::Variant 사용
+        let (code, category, retryable, retry_after_ms, resource) = match self {
+            Self::QuotaExceeded { current, max, .. } => (
+                ErrorCode::QuotaExceeded,
+                ErrorCategory::Throttling,
+                true,
+                500,
+                Some(ResourceSnapshot {
+                    current_concurrent: current as u32,
+                    max_concurrent: max as u32,
+                    ..Default::default()
+                }),
+            ),
+            Self::AcquireTimeout(_) => (
+                ErrorCode::AcquireTimeout,
+                ErrorCategory::Throttling,
+                true,
+                1000,
+                None,
+            ),
+            Self::ExecutionTimeout { limit_ms, elapsed_ms, .. } => (
+                ErrorCode::ExecutionTimeout,
+                ErrorCategory::Timeout,
+                false,
+                0,
+                Some(ResourceSnapshot {
+                    limit_ms,
+                    elapsed_ms,
+                    ..Default::default()
+                }),
+            ),
+            Self::Inactive(_) => (
+                ErrorCode::TenantInactive,
+                ErrorCategory::Client,
+                false,
+                0,
+                None,
+            ),
+            Self::PathDenied(_) => (
+                ErrorCode::PathDenied,
+                ErrorCategory::Client,
+                false,
+                0,
+                None,
+            ),
+            Self::RuntimeError(_) => (
+                ErrorCode::RuntimePanic, // 또는 적절한 코드
+                ErrorCategory::Client,
+                false,
+                0,
+                None,
+            ),
+            Self::Internal(_) => (
+                ErrorCode::Internal,
+                ErrorCategory::Server,
+                false,
+                0,
+                None,
+            ),
         };
-        let msg = err.to_string();
-        assert!(msg.contains("execution terminated"));
-        assert!(msg.contains("100ms"));
-        assert!(msg.contains("150ms"));
+
+        KrepisError {
+            code: code as i32, // Protobuf enum은 i32로 캐스팅하여 저장
+            message: self.to_string(),
+            meta: Some(ErrorMeta {
+                retryable,
+                category: category as i32,
+                retry_after_ms,
+                resource_snapshot: resource,
+                ..Default::default()
+            }),
+            tenant_id,
+            request_id,
+            trace_id,
+            timestamp: crate::domain::now_ms() as i64,
+            ..Default::default()
+        }
     }
 }

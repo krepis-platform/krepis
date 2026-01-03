@@ -283,8 +283,9 @@ impl SovereignPool {
     /// 
     /// 주의: 이 메서드는 Bulkhead 제어를 거치지 않습니다.
     /// 동시성 제어가 필요한 경우 `execute_isolated()`를 사용하세요.
-    pub fn acquire(&self, tenant_id: &str) -> Result<RuntimeGuard<'_>> {
-        let tenant = self.get_tenant_metadata(tenant_id)?;
+    pub fn acquire(&self, tenant_id: &str) -> Result<RuntimeGuard<'_>, TenantError> {
+        let tenant = self.get_tenant_metadata(tenant_id)
+            .map_err(|e| TenantError::Internal(format!("Metadata cache error: {}", e)))?;
         tenant.validate()?;
 
         let mut pool = self.pool.lock();
@@ -297,7 +298,9 @@ impl SovereignPool {
             }
             None => {
                 info!("🆕 Creating new isolate: {}", tenant_id);
-                PooledRuntime::new(self.create_runtime(&tenant)?)
+                let runtime = self.create_runtime(&tenant)
+                    .map_err(|e| TenantError::Internal(format!("V8 Isolate creation failed: {}", e)))?;
+                PooledRuntime::new(runtime)
             }
         };
 
@@ -382,7 +385,7 @@ impl SovereignPool {
     }
 
     /// [Internal] 테넌트 메타데이터 조회 (캐시)
-    fn get_tenant_metadata(&self, tenant_id: &str) -> Result<TenantMetadata> {
+    fn get_tenant_metadata(&self, tenant_id: &str) -> anyhow::Result<TenantMetadata> {
         let mut cache = self.tenant_cache.lock();
         if let Some(meta) = cache.get(tenant_id) {
             return Ok(meta.clone());
@@ -425,14 +428,15 @@ impl SovereignPool {
     ///     Ok(())
     /// }).await;
     /// ```
-    pub async fn execute_isolated<F, R>(&self, tenant_id: &str, f: F) -> Result<R>
+    pub async fn execute_isolated<F, R>(&self, tenant_id: &str, f: F) -> Result<R, TenantError>
     where
-        F: FnOnce(&mut deno_core::JsRuntime) -> Result<R>,
+        F: FnOnce(&mut deno_core::JsRuntime) -> anyhow::Result<R>,
     {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // 1. [C-002] 리소스 정책 조회
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        let tenant = self.get_tenant_metadata(tenant_id)?;
+        let tenant = self.get_tenant_metadata(tenant_id)
+            .map_err(|e| TenantError::Inactive(format!("Metadata error: {}", e)))?;
         let config = tenant.resource_config();
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -455,23 +459,32 @@ impl SovereignPool {
         // 4. [C-003] Watchdog 타이머 생성
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         let watchdog_tenant_id = tenant_id.to_string();
-        let watchdog = tokio::spawn(async move {
-            tokio::time::sleep(config.max_execution_time).await;
-            // 타임아웃 도달 - V8 Isolate 강제 종료
-            warn!("⏰ Watchdog triggered for tenant: {} (limit: {:?})", 
-                watchdog_tenant_id, config.max_execution_time);
-            term_handle_clone.terminate();
+        let max_exec_time = config.max_execution_time;
+
+        // OS 스레드를 직접 생성하여 V8 루프와 무관하게 동작하게 함
+        std::thread::spawn(move || {
+            std::thread::sleep(max_exec_time);
+            // V8이 루프를 돌고 있어도 OS 스레드이므로 지정된 시간에 반드시 깨어납니다.
+            if !term_handle_clone.is_terminated() {
+                warn!("⏰ Physical Watchdog triggered for tenant: {} (limit: {:?})", 
+                    watchdog_tenant_id, max_exec_time);
+                term_handle_clone.terminate();
+            }
         });
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // 5. 실행
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         let start_time = Instant::now();
-        let result = f(guard.runtime_mut());
+        let result = f(guard.runtime_mut())
+            .map_err(|e| {
+                TenantError::RuntimeError(format!("V8 Execution Error: {}", e))
+            });
         let elapsed = start_time.elapsed();
 
-        // 타이머 종료
-        watchdog.abort();
+        if result.is_ok() && !term_handle.is_terminated() {
+            return result;
+        }
 
         // 7. [C-003 결과 처리] 타임아웃 발생 시 Isolation 폐기
         if term_handle.is_terminated() {
