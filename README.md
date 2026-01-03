@@ -7,7 +7,7 @@
 **Sovereign Control, Fractal Intelligence**
 
 - **Systemic Rigidity**: Rust + Deno for deterministic runtime
-- **Fractal Intelligence**: Master-Expert-Sub AI legion architecture
+- **Fractal Intelligence**: Master-Expert-Atomic Executor legion architecture
 - **Explicit Context**: Zero implicit state propagation
 - **Sovereign Kernel**: Rust controls Deno, not vice versa
 

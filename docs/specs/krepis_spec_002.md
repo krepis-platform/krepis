@@ -1,6 +1,8 @@
-# **📑 \[Krepis-Spec-002\] Dependency Injection Module Specification (v1.1.0)**
+# 📑 
 
-**버전:** v1.1.0 (Architecture Guard & Context Integrated)
+ Dependency Injection Module Specification (v1.2.0)
+
+**버전:** v1.2.0 (Explicit Context Driven & Zero-Reflection)
 
 **상태:** Final Draft
 
@@ -10,135 +12,129 @@
 
 ## **Ⅰ. 설계 철학 (Design Philosophy)**
 
-1. **Zero-Reflection Core:** reflect-metadata 없이 정적 분석만으로 의존성을 해결하여 런타임 성능을 극대화합니다.  
-2. **Context-Aware Scoping:** AsyncLocalStorage와 결합하여 별도의 인자 전달 없이도 요청 단위의 객체 격리(Isolation)를 자동화합니다.  
-3. **Fail-Fast Validation:** 순환 참조, 의존성 누락, 파라미터 불일치를 인스턴스화 시점이 아닌 **애플리케이션 부트스트랩 시점**에 검증합니다.  
-4. **Interface-First:** 구체 클래스가 아닌 심볼/추상 클래스 기반의 바인딩을 권장하여 헥사고날 아키텍처를 강제합니다.
+1. **Context-Bound Lifetime:** 모든 객체는 커널로부터 부여받은 `IKrepisContext`의 생명주기에 결속됩니다.
+2. **Explicit Dependency Resolution:** 암시적인 전역 조회를 배제하고, `ctx`를 통해 현재 요청에 격리된 의존성을 명시적으로 획득합니다.
+3. **AOT(Ahead-Of-Time) Validation:** 부트스트랩 시점에 전체 의존성 그래프를 검증하여 런타임 중 `Dependency Missing` 에러를 원천 차단합니다.
+4. **Sovereign Isolation:** 테넌트별 리소스 제한이 DI 레이어에서도 반영되도록, 각 스코프는 테넌트의 정책 정보를 포함합니다.
 
 ---
 
 ## **Ⅱ. 핵심 메커니즘 고도화**
 
-### **1\. 서비스 식별자 및 불변 바인딩**
+### **1. Explicit Contextual Token**
 
-인터페이스 기반 개발을 위해 Token 시스템을 표준화합니다.
+서비스 식별자는 이제 컨텍스트 정보와 결합하여 해결됩니다.
 
-TypeScript
-
-export class InjectionToken\<T\> {  
-  constructor(public readonly description: string) {}  
+```typescript
+export class InjectionToken<T> {
+  constructor(public readonly description: string) {}
 }
 
-export type ServiceIdentifier\<T\> \= InjectionToken\<T\> | (new (...args: any\[\]) \=\> T) | symbol;
+export type ServiceIdentifier<T> = InjectionToken<T> | (new (...args: any[]) => T) | symbol;
 
-### **2\. 정적 의존성 검증 (Validation Guard)**
+```
 
-개발자가 static inject와 constructor의 순서를 틀리는 실수를 방지합니다.
+### **2. IServiceProvider (The Sovereign Resolver)**
 
-TypeScript
+더 이상 `RequestContext.current()`를 쓰지 않고, 인자로 받은 `ctx`를 통해 객체를 해결합니다.
 
-export interface IInjectable {  
-  readonly inject: ServiceIdentifier\<any\>\[\];  
+```typescript
+export interface IServiceProvider {
+  /**
+   * 명시적으로 전달된 ctx를 기반으로 객체 해결 (Scoped/Transient)
+   */
+  get<T>(ctx: IKrepisContext, id: ServiceIdentifier<T>): T;
+  
+  /**
+   * 싱글톤 또는 전역 서비스 해결 (Context-free)
+   */
+  getGlobal<T>(id: ServiceIdentifier<T>): T;
 }
 
-// 부트스트랩 시 검증 로직  
-if (Implementation.length \!== (Implementation as any).inject?.length) {  
-  throw new Error(\`KrepisDIError: Parameter count mismatch in ${Implementation.name}\`);  
-}
+```
 
 ---
 
-## **Ⅲ. 상세 API 및 라이프사이클 (ALS 통합)**
+## **Ⅲ. 상세 라이프사이클 및 스코핑**
 
-### **1\. IServiceProvider (Scope Auto-Management)**
+### **1. Scope Mapping (Context ↔ Container)**
 
-@krepis/context와 결합하여 현재 비동기 흐름에 맞는 컨테이너를 자동으로 반환합니다.
+요청이 들어오면 커널의 `IKrepisContext`와 1:1로 매핑되는 `IServiceScope`가 생성됩니다.
 
-TypeScript
+### **2. Disposable Scope Management**
 
-export interface IServiceProvider {  
-  /\*\* 현재 컨텍스트(ALS)에 종속된 객체 해결 \*/  
-  get\<T\>(id: ServiceIdentifier\<T\>): T;  
-    
-  /\*\* 테스트 및 특수 상황을 위한 수동 스코프 생성 \*/  
-  createScope(): IServiceScope;  
+`Symbol.dispose`를 통해 `ctx`가 해제될 때 스코프 내의 객체들도 함께 정리됩니다.
+
+```typescript
+export interface IServiceScope extends Disposable {
+  readonly serviceProvider: IServiceProvider;
+  readonly context: IKrepisContext;
 }
 
-### **2\. 순환 참조 탐지 엔진 (Circular Guard)**
-
-TypeScript
-
-// 내부 해결 로직 (Pseudo-code)  
-resolve\<T\>(id: ServiceIdentifier\<T\>, resolutionStack: Set\<ServiceIdentifier\<any\>\>): T {  
-  if (resolutionStack.has(id)) {  
-    throw new Error(\`KrepisDIError: Circular dependency detected: ${Array.from(resolutionStack).join(' \-\> ')} \-\> ${id}\`);  
-  }  
-  resolutionStack.add(id);  
-  // ... 인스턴스 생성 로직  
-  resolutionStack.delete(id);  
-}
+```
 
 ---
 
 ## **Ⅳ. 모듈화 및 확장 전략**
 
-### **1\. IServiceModule (분산 등록)**
+### **1. IInjectable (Static Dependency Declaration)**
 
-거대한 등록 파일을 방지하기 위해 도메인별 모듈 등록 방식을 지원합니다.
+런타임 성능을 위해 리플렉션 대신 정적 프로퍼티를 사용합니다.
 
-TypeScript
-
-export interface IServiceModule {  
-  configure(services: IServiceCollection): void;  
+```typescript
+export interface IInjectable {
+  // 의존성 목록을 정적으로 정의
+  static readonly inject: ServiceIdentifier<any>[];
 }
 
-// 사용 예시  
-const app \= new KrepisApplication();  
-app.addModule(new OrderDomainModule());  
-app.addModule(new InfrastructureModule());
+// 예시: 명시적 주입을 받는 서비스
+export class OrderService implements IInjectable {
+  static readonly inject = [IUserRepository, IPaymentGateway];
 
-### **2\. Mocking & Override (Testing Support)**
+  constructor(
+    private readonly users: IUserRepository,
+    private readonly payment: IPaymentGateway
+  ) {}
 
-테스트 환경에서 특정 의존성을 즉시 교체할 수 있는 기능을 제공합니다.
+  async createOrder(ctx: IKrepisContext, orderData: any) {
+    // 하위 의존성 호출 시 ctx를 명시적으로 전파
+    const user = await this.users.findById(ctx, orderData.userId);
+    // ...
+  }
+}
 
-TypeScript
-
-services.replace(IUserRepository, new MockUserRepository());
+```
 
 ---
 
-## **Ⅴ. Context 통합 파이프라인 (The Auto-Scope)**
+## **Ⅴ. Context 통합 파이프라인 (Explicit Flow)**
 
-RequestContext.run 시점에 DI 스코프를 함께 생성하여 전파하는 메커니즘입니다.
+파이프라인 단계에서 `ctx`와 `scope`를 생성하여 다음 핸들러로 전달합니다.
 
-TypeScript
-
-export class DiContextBehavior implements IPipelineBehavior {  
+```typescript
+export class DiContextBehavior implements IPipelineBehavior {
   constructor(private readonly rootProvider: IServiceProvider) {}
 
-  async handle(ctx: PipelineContext, next: NextPipe\<any\>) {  
-    const scope \= this.rootProvider.createScope();  
-      
-    // RequestContext에 스코프된 ServiceProvider를 주입  
-    return RequestContext.run(  
-      ctx.store.set(DI\_CONTAINER, scope.serviceProvider),   
-      async () \=\> {  
-        try {  
-          return await next();  
-        } finally {  
-          scope.dispose(); // 요청 종료 시 스코프 내 Transient/Scoped 객체 자동 정리  
-        }  
-      }  
-    );  
-  }  
+  async handle(rawRequest: any, next: NextPipe<any>) {
+    // 1. 커널 컨텍스트 생성 (Sovereign Bridge 활용)
+    using ctx = await SovereignContextBridge.fromRequest(rawRequest);
+    
+    // 2. 해당 컨텍스트에 묶인 DI 스코프 생성
+    using scope = this.rootProvider.createScope(ctx);
+
+    // 3. 컨텍스트와 스코프를 하위 파이프로 명시적 전달
+    return await next(ctx, scope.serviceProvider);
+  }
 }
+
+```
 
 ---
 
 ## **Ⅵ. 기대 효과 (KPI)**
 
-1. **신뢰성(Reliability):** 애플리케이션 기동 시 모든 의존성 그래프의 무결성 검증 완료.  
-2. **생산성(DX):** RequestContext.current().get(ID)를 통해 어디서든 타입 안전하게 객체 획득.  
-3. **성능(Latency):** 리플렉션 비용 제거로 인해 기존 DI 엔진 대비 인스턴스 생성 속도 약 20% 향상.
+1. **인과관계의 명확성:** 어떤 객체가 어떤 요청(`ctx`)에 의해 생성되었는지 100% 추적 가능 (AI 분석 최적화).
+2. **메모리 안정성:** `AsyncLocalStorage`의 가비지 컬렉션 지연 문제 해결. `using` 구문으로 요청 종료 즉시 스코프 메모리 해제.
+3. **격리성(Isolation):** 테넌트 A의 객체가 테넌트 B의 컨텍스트에서 오염될 가능성을 타입 시스템 수준에서 차단.
 
 ---

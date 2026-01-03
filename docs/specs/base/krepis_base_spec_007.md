@@ -6,8 +6,8 @@ Krepis는 단일 AI가 모든 코드를 짜는 방식이 아닌, **'프랙탈 �
 
 ### **1.1 Super Micro Tasking & Recursive CI**
 
-* **원자적 분해(Atomic Decomposition):** Master AI는 거대한 Task를 더 이상 쪼갤 수 없는 10\~20줄 내외의 **Super Micro Task**로 분할합니다.  
-* **재귀적 자가 교정(Recursive Self-Correction):** 각 Micro Task는 Sub AI에게 할당되어 **\[작성 → 네이티브 테스트 실행 → 에러 로그 분석 → 재수정\]** 루프를 통과해야만 완료됩니다.  
+* **원자적 분해(Atomic Decomposition):** LegionMaster는 거대한 Task를 더 이상 쪼갤 수 없는 10\~20줄 내외의 **Super Micro Task**로 분할합니다.  
+* **재귀적 자가 교정(Recursive Self-Correction):** 각 Micro Task는 Atomic Executor에게 할당되어 **\[작성 → 네이티브 테스트 실행 → 에러 로그 분석 → 재수정\]** 루프를 통과해야만 완료됩니다.  
 * **무결성 커밋(Zero-Defect Commit):** 모든 단위 테스트를 통과한 코드 조각들만이 최종적으로 AiDev 브랜치에 커밋됩니다.
 
 ### **1.2 Explicit Context Propagation (지휘 체계)**
@@ -33,7 +33,7 @@ Krepis는 단일 AI가 모든 코드를 짜는 방식이 아닌, **'프랙탈 �
 
 사용자가 명세서만 넣으면 서버를 통째로 완성해주는 **Krepis의 킬러 서비스**입니다.
 
-* **상세 문답 인터페이스:** Master AI가 유저와 대화하며 아키텍처를 확정합니다.  
+* **상세 문답 인터페이스:** LegionMaster가 유저와 대화하며 아키텍처를 확정합니다.  
 * **명세서 기반 자동 생성:** 업로드된 명세(OpenAPI, MD 등)를 기반으로 프랙탈 군단이 즉시 인프라를 구축합니다.  
 * **디지털 트윈 시뮬레이션:** 배포 전 가상 환경에서 10만 명의 트래픽을 투입하여 성능을 시각적으로 증명합니다.  
 * **Sovereign Sentry (자율 치유):** 배포 후 발생하는 장애를 AI가 실시간으로 감지하고 핫패치하여 'Admin-less' 환경을 실현합니다.
@@ -61,3 +61,5 @@ Krepis는 단일 AI가 모든 코드를 짜는 방식이 아닌, **'프랙탈 �
 * **크레딧 시스템:** 구독 쿼터 초과 시 추가 결제를 유도하여 현금 흐름을 다각화합니다.
 
 ---
+
+

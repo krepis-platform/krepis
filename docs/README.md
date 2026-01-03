@@ -22,7 +22,7 @@ Krepis는 AI 군단과 인간 아키텍트가 협업하여 설계-생성-검증-
 
 * **Systemic Rigidity (Rust \+ Deno):** 핵심 엔진은 **Hyper-Pingora** 기반 Rust로 구축하고, **Deno**를 통해 런타임 결정성을 확보합니다.  
 * **Fractal Intelligence (AI Legion):** 단일 모델의 한계를 넘어, **Master-Expert-Sub**로 이어지는 프랙탈 구조의 AI 군단이 무결점 코드를 생산합니다.  
-* **Explicit Context Propagation:** **AsyncLocalStorage를 폐기**하고, Context 객체를 AI 지휘 체계의 신경망으로 활용하여 상위 의도를 말단 Sub AI까지 100% 전파합니다.
+* **Explicit Context Propagation:** **AsyncLocalStorage를 폐기**하고, Context 객체를 AI 지휘 체계의 신경망으로 활용하여 상위 의도를 말단 Atomic Executor까지 100% 전파합니다.
 
 [Details](./specs/base/krepis_base_spec_001.md)
 ---
@@ -45,9 +45,9 @@ Krepis는 AI 군단과 인간 아키텍트가 협업하여 설계-생성-검증-
 
 ### **1\. 계층별 모델 배치 (Legion Hierarchy)**
 
-* **Master AI (The Brain):** 전략 수립 및 Task 분할. (Llama 3.3 70B, Mistral Large 2\)  
-* **Expert AI (The Guard):** 도메인별(보안, 성능) 정밀 검수. (DeepSeek-V3, Mistral Small 3\)  
-* **Sub AI (The Hands):** 원자 단위 코드 생성 및 무한 루프 검증. (Qwen2.5-Coder 7B, Codestral Mamba)
+* **LegionMaster (The Brain):** 전략 수립 및 Task 분할. (Llama 3.3 70B, Mistral Large 2\)  
+* **SovereignArchitect (The Guard):** 도메인별(보안, 성능) 정밀 검수. (DeepSeek-V3, Mistral Small 3\)  
+* **Atomic Executor (The Hands):** 원자 단위 코드 생성 및 무한 루프 검증. (Qwen2.5-Coder 7B, Codestral Mamba)
 
 ### **2\. "USE" 자율 구축 시스템**
 
@@ -76,7 +76,7 @@ Krepis는 AI 군단과 인간 아키텍트가 협업하여 설계-생성-검증-
 | :---- | :---- | :---- | :---- | :---- | :---- |
 | **타겟** | 학습자 | 개인 | 전문 개발자 | 스타트업 | 대기업 |
 | **USE 기능** | 불가 | 소규모(월 1회) | 단일 서버(월 3회) | 전체 구축(월 10회) | 무제한/커스텀 |
-| **지능 수준** | RAG 가이드 | 경량 Sub AI | 정예 Sub AI | **자율 치유(Sentry)** | 전용 클러스터 |
+| **지능 수준** | RAG 가이드 | 경량 Atomic Executor | 정예 Atomic Executor | **자율 치유(Sentry)** | 전용 클러스터 |
 | **AI 검수** | 기본 | 정적 분석 | 전문가 모델 | 실시간 OWASP | 제로데이 패치 |
 
 ### **2\. 마켓플레이스 경제 (95:5 원칙)**
