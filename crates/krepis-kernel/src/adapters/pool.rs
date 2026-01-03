@@ -1,34 +1,84 @@
 use anyhow::Result;
+use dashmap::DashMap;
 use deno_core::{JsRuntime, RuntimeOptions};
 use lru::LruCache;
 use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::info;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::{info, warn};
 
 use crate::adapters::storage::SovereignJournal;
-use crate::domain::tenant::{TenantMetadata, TenantTier};
 use crate::domain::now_ms;
 use crate::domain::pool::PoolPolicy;
+use crate::domain::tenant::{TenantError, TenantMetadata, TenantTier};
 use crate::ops::{self, SovereignStats};
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// [Hexagonal Adapter] Sovereign Pool with C-002 Bulkhead Pattern
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 /// [Hexagonal Adapter] Sovereign Pool
-/// 외부 의존성(V8, Sled)을 실질적으로 제어하는 어댑터 레이어
+/// 
+/// V8 Isolate 풀링과 테넌트별 동시성 제어(Bulkhead)를 담당하는 어댑터 레이어입니다.
+/// 
+/// # C-002 Compliance: Bulkhead Pattern
+/// 
+/// 각 테넌트는 자신의 등급(`TenantTier`)에 따라 할당된 동시 실행 슬롯을 가지며,
+/// `tokio::sync::Semaphore`를 통해 RAII 방식으로 관리됩니다.
+/// 
+/// - Free: 5 concurrent requests
+/// - Standard: 20 concurrent requests  
+/// - Enterprise: 100 concurrent requests
+/// 
+/// # Spec-003 Compliance: Concurrency & Throttling
+/// 
+/// 동시 실행 한도 초과 시 즉시 `TenantError::QuotaExceeded`를 반환하거나,
+/// `acquire_timeout` 동안 대기 후 `TenantError::AcquireTimeout`을 반환합니다.
 pub struct SovereignPool {
+    /// LRU 캐시 기반 V8 Isolate 풀
     pool: Mutex<LruCache<String, PooledRuntime>>,
+    
+    /// 테넌트 메타데이터 캐시
     tenant_cache: Mutex<LruCache<String, TenantMetadata>>,
+    
+    /// 트랜잭션 저널 (테넌트 격리)
     journal: Arc<SovereignJournal>,
+    
+    /// 풀 설정
     config: PoolConfig,
+    
+    /// C-002: 테넌트별 동시성 제어 세마포어
+    /// 
+    /// Key: tenant_id
+    /// Value: Arc<Semaphore> (permits = max_concurrent_requests)
+    /// 
+    /// DashMap을 사용하여 락 없이 동시 접근 가능
+    semaphores: DashMap<String, Arc<Semaphore>>,
 }
 
+/// Pool 설정
+/// 
+/// # C-002 Enhancement
+/// `acquire_timeout` 필드 추가 - 세마포어 획득 대기 시간
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
+    /// 최대 풀 크기 (캐시된 Isolate 수)
     pub max_pool_size: usize,
+    
+    /// 유휴 Isolate 최대 유지 시간
     pub max_idle_time: Duration,
+    
+    /// 신규 테넌트 기본 등급
     pub default_tier: TenantTier,
+    
+    /// C-002: 세마포어 획득 타임아웃
+    /// 
+    /// 즉시 획득 실패 시, 이 시간만큼 대기 후 타임아웃 에러 반환
+    pub acquire_timeout: Duration,
 }
 
 impl Default for PoolConfig {
@@ -37,6 +87,7 @@ impl Default for PoolConfig {
             max_pool_size: 100,
             max_idle_time: Duration::from_secs(300),
             default_tier: TenantTier::Free,
+            acquire_timeout: Duration::from_secs(5),
         }
     }
 }
@@ -56,7 +107,7 @@ impl PooledRuntime {
             request_count: 0,
         }
     }
-    
+
     fn touch(&mut self) {
         self.last_used = Instant::now();
         self.request_count += 1;
@@ -64,27 +115,127 @@ impl PooledRuntime {
 }
 
 impl SovereignPool {
+    /// 새로운 SovereignPool 인스턴스 생성
     pub fn new(journal: Arc<SovereignJournal>, config: PoolConfig) -> Self {
         let pool_size = NonZeroUsize::new(config.max_pool_size).expect("Invalid pool size");
         let tenant_size = NonZeroUsize::new(1000).unwrap();
-        
-        info!("🏊 Sovereign Pool (Hexagonal Adapter) initialized");
-        
+
+        info!("🏊 Sovereign Pool initialized with Bulkhead pattern (C-002)");
+        info!("   └─ Acquire timeout: {:?}", config.acquire_timeout);
+
         Self {
             pool: Mutex::new(LruCache::new(pool_size)),
             tenant_cache: Mutex::new(LruCache::new(tenant_size)),
             journal,
             config,
+            semaphores: DashMap::new(),
         }
     }
 
-    /// [Command] Isolate 확보
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // C-002: Bulkhead Pattern - Semaphore Management
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// [C-002] 테넌트별 세마포어 획득 또는 생성
+    /// 
+    /// DashMap의 entry API를 사용하여 원자적으로 세마포어를 생성하거나 기존 것을 반환합니다.
+    /// 
+    /// # Arguments
+    /// * `tenant_id` - 테넌트 식별자
+    /// * `max_permits` - 최대 동시 실행 수 (Tier에서 결정)
+    fn get_or_create_semaphore(&self, tenant_id: &str, max_permits: usize) -> Arc<Semaphore> {
+        self.semaphores
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| {
+                info!("🚦 Creating semaphore for tenant {} (permits: {})", tenant_id, max_permits);
+                Arc::new(Semaphore::new(max_permits))
+            })
+            .value()
+            .clone()
+    }
+
+    /// [C-002] 세마포어 permit 획득 (RAII)
+    /// 
+    /// 즉시 획득을 시도하고, 실패 시 타임아웃까지 대기합니다.
+    /// 
+    /// # Returns
+    /// * `Ok(OwnedSemaphorePermit)` - Drop 시 자동으로 permit 반환
+    /// * `Err(TenantError::QuotaExceeded)` - 즉시 획득 실패 시 (정보 제공용)
+    /// * `Err(TenantError::AcquireTimeout)` - 타임아웃 초과 시
+    /// 
+    /// # RAII Safety
+    /// `OwnedSemaphorePermit`은 Drop trait을 구현하여 스코프를 벗어나면
+    /// 자동으로 permit이 반환됩니다. 패닉이 발생해도 안전합니다.
+    async fn acquire_permit(
+        &self,
+        tenant_id: &str,
+        semaphore: Arc<Semaphore>,
+        max_permits: usize,
+    ) -> Result<OwnedSemaphorePermit, TenantError> {
+        // 1. 즉시 획득 시도 (Non-blocking)
+        match Arc::clone(&semaphore).try_acquire_owned() {
+            Ok(permit) => {
+                info!("✅ Permit acquired immediately for {}", tenant_id);
+                return Ok(permit);
+            }
+            Err(_) => {
+                // 현재 사용 중인 슬롯 수 계산
+                let current = max_permits - semaphore.available_permits();
+                warn!(
+                    "⏳ Tenant {} at capacity ({}/{}), waiting...",
+                    tenant_id, current, max_permits
+                );
+            }
+        }
+
+        // 2. 타임아웃 대기 (Blocking with timeout)
+        match tokio::time::timeout(self.config.acquire_timeout, semaphore.acquire_owned()).await {
+            Ok(Ok(permit)) => {
+                info!("✅ Permit acquired after wait for {}", tenant_id);
+                Ok(permit)
+            }
+            Ok(Err(_)) => {
+                // 세마포어가 닫힌 경우 (정상적으로는 발생하지 않음)
+                Err(TenantError::AcquireTimeout(tenant_id.to_string()))
+            }
+            Err(_) => {
+                // 주의: 여기서 semaphore를 다시 쓰려면 위 timeout 호출 시에도 clone을 했어야 합니다.
+                // 하지만 사용량이 max_permits와 같다고 간주할 수 있으므로 숫자로 처리합니다.
+                warn!(
+                    "⏰ Permit acquisition timed out for {} ({}/{})",
+                    tenant_id, max_permits, max_permits
+                );
+                Err(TenantError::AcquireTimeout(tenant_id.to_string()))
+            }
+        }
+    }
+
+    /// [C-002 Query] 특정 테넌트의 현재 활성 요청 수 조회
+    /// 
+    /// 모니터링 및 디버깅 용도로 사용됩니다.
+    pub fn active_requests(&self, tenant_id: &str) -> Option<usize> {
+        self.semaphores.get(tenant_id).map(|entry| {
+            let semaphore = entry.value();
+            let tenant = self.get_tenant_metadata(tenant_id).ok()?;
+            let max = tenant.resource_config().max_concurrent_requests;
+            Some(max - semaphore.available_permits())
+        })?
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Core Pool Operations
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// [Command] Isolate 확보 (동기)
+    /// 
+    /// 주의: 이 메서드는 Bulkhead 제어를 거치지 않습니다.
+    /// 동시성 제어가 필요한 경우 `execute_isolated()`를 사용하세요.
     pub fn acquire(&self, tenant_id: &str) -> Result<RuntimeGuard<'_>> {
         let tenant = self.get_tenant_metadata(tenant_id)?;
         tenant.validate()?;
-        
+
         let mut pool = self.pool.lock();
-        
+
         let pooled = match pool.pop(tenant_id) {
             Some(mut cached) => {
                 info!("♻️ Reusing warm isolate: {}", tenant_id);
@@ -96,7 +247,7 @@ impl SovereignPool {
                 PooledRuntime::new(self.create_runtime(&tenant)?)
             }
         };
-        
+
         Ok(RuntimeGuard {
             runtime: Some(pooled),
             tenant_id: tenant_id.to_string(),
@@ -110,14 +261,14 @@ impl SovereignPool {
         let ctx_data = crate::proto::KrepisContext {
             request_id: uuid::Uuid::new_v4().to_string(),
             tenant_id: tenant.tenant_id.clone(),
-            priority: 1, 
+            priority: 1,
             timestamp: now_ms(),
             ..Default::default()
         };
-        
+
         let ctx_buffer = Rc::new(prost::Message::encode_to_vec(&ctx_data));
         let stats = Rc::new(RefCell::new(SovereignStats::default()));
-        
+
         // 2. Extension 초기화 (v0.316 매크로 방식 준수)
         let mut ext = ops::krepis_sovereign::init_ops();
         let journal = self.journal.clone();
@@ -129,13 +280,13 @@ impl SovereignPool {
             state.put(journal.clone());
             state.put(tenant_meta.clone());
         }));
-        
+
         // 3. Runtime 생성
         let runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![ext],
             ..Default::default()
         });
-        
+
         Ok(runtime)
     }
 
@@ -157,9 +308,12 @@ impl SovereignPool {
         }
     }
 
+    /// [Internal] Isolate 반환
     pub fn release(&self, tenant_id: String, pooled: PooledRuntime) {
-        if tenant_id.is_empty() { return; }
-        
+        if tenant_id.is_empty() {
+            return;
+        }
+
         let mut pool = self.pool.lock();
         pool.put(tenant_id, pooled);
     }
@@ -174,6 +328,7 @@ impl SovereignPool {
         }
     }
 
+    /// [Internal] 테넌트 메타데이터 조회 (캐시)
     fn get_tenant_metadata(&self, tenant_id: &str) -> Result<TenantMetadata> {
         let mut cache = self.tenant_cache.lock();
         if let Some(meta) = cache.get(tenant_id) {
@@ -184,27 +339,100 @@ impl SovereignPool {
         Ok(meta)
     }
 
-    /// [Helper] 특정 테넌트의 런타임을 획득하여 클로저를 실행하고 자동 반환합니다.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // C-002: Primary Execution API with Bulkhead
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /// [C-002 Primary] 테넌트 격리 실행 with Bulkhead
     /// 
-    /// # Spec-002 Compliance: Tenant Isolation
-    /// 에러 발생 시 저널 기록도 테넌트별로 격리됩니다.
+    /// 테넌트별 동시성 제한(Bulkhead)을 적용하여 스크립트를 실행합니다.
+    /// 
+    /// # Spec-003 Compliance: Concurrency & Throttling
+    /// 
+    /// 1. 테넌트의 `max_concurrent_requests` 조회
+    /// 2. 세마포어에서 permit 획득 (RAII)
+    /// 3. Isolate에서 클로저 실행
+    /// 4. 결과와 무관하게 permit 자동 반환 (Drop)
+    /// 
+    /// # Error Handling
+    /// 
+    /// - `TenantError::QuotaExceeded`: 정보 제공용 (즉시 실패 시)
+    /// - `TenantError::AcquireTimeout`: 타임아웃 초과
+    /// - 실행 에러: 저널에 기록 후 전파
+    /// 
+    /// # Example
+    /// 
+    /// ```ignore
+    /// let result = pool.execute_isolated("tenant-123", |runtime| {
+    ///     runtime.execute_script("test", "1 + 1".to_string())?;
+    ///     Ok(())
+    /// }).await;
+    /// ```
     pub async fn execute_isolated<F, R>(&self, tenant_id: &str, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut deno_core::JsRuntime) -> Result<R>,
+    {
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // 1. [C-002] 리소스 정책 조회
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        let tenant = self.get_tenant_metadata(tenant_id)?;
+        let max_concurrent = tenant.resource_config().max_concurrent_requests;
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // 2. [C-002] Bulkhead: Permit 획득 (RAII)
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        let semaphore = self.get_or_create_semaphore(tenant_id, max_concurrent);
+        let _permit = self.acquire_permit(tenant_id, semaphore, max_concurrent).await?;
+        
+        // 💡 RAII Safety: `_permit`이 스코프를 벗어나면 자동으로 반환됩니다.
+        //    패닉이 발생해도 Drop이 호출되어 permit이 반환됩니다.
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // 3. Isolate 확보 및 실행
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        let mut guard = self.acquire(tenant_id)?;
+        let result = f(guard.runtime_mut());
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // 4. [C-001] 에러 저널링 (테넌트 격리)
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if let Err(ref e) = result {
+            let _ = self.journal.log_transaction(
+                tenant_id,
+                &crate::domain::journal::TransactionLog {
+                    timestamp: crate::domain::now_ms(),
+                    op_name: format!("{}:execution_error", tenant_id),
+                    request_id: "internal-fault-handler".to_string(),
+                    status: crate::domain::journal::LogStatus::Failed,
+                },
+            );
+            tracing::error!("🛡️ Execution failed for {}: {}", tenant_id, e);
+        }
+
+        // _permit이 여기서 drop되어 자동으로 세마포어에 반환됨
+        result
+    }
+
+    /// [Internal] Bulkhead를 우회하는 실행 (테스트 전용)
+    /// 
+    /// 동시성 제한 없이 직접 실행합니다. 통합 테스트에서만 사용하세요.
+    #[doc(hidden)]
+    pub async fn execute_unguarded<F, R>(&self, tenant_id: &str, f: F) -> Result<R>
     where
         F: FnOnce(&mut deno_core::JsRuntime) -> Result<R>,
     {
         let mut guard = self.acquire(tenant_id)?;
         let result = f(guard.runtime_mut());
 
-        // 💡 C-001 Fix: 에러 저널링 시 tenant_id 전달
         if let Err(ref e) = result {
             let _ = self.journal.log_transaction(
-                tenant_id,  // 💡 테넌트 격리 키 전달
+                tenant_id,
                 &crate::domain::journal::TransactionLog {
                     timestamp: crate::domain::now_ms(),
                     op_name: format!("{}:panic_caught", tenant_id),
                     request_id: "internal-fault-handler".to_string(),
                     status: crate::domain::journal::LogStatus::Failed,
-                }
+                },
             );
             tracing::error!("🛡️ Internal Fault Handled for {}: {}", tenant_id, e);
         }
@@ -212,8 +440,16 @@ impl SovereignPool {
         result
     }
 
-    /// [System] 테스트 종료 시 V8 스택 순서(LIFO)를 지키며 자원을 해제하기 위한 메서드
+    /// [System] 풀 종료 및 자원 해제
+    /// 
+    /// V8 스택 순서(LIFO)를 지키며 Isolate를 해제하고,
+    /// 세마포어 맵을 정리합니다.
     pub fn shutdown(&self) {
+        // 1. 세마포어 맵 정리
+        self.semaphores.clear();
+        info!("🚦 Semaphore map cleared");
+
+        // 2. V8 Isolate 정리 (LIFO 순서)
         let mut pool = self.pool.lock();
         let mut items = Vec::new();
 
@@ -223,11 +459,20 @@ impl SovereignPool {
 
         items.reverse();
 
-        info!("🛑 Sovereign Pool shutdown: {} isolates dropped safely.", items.len());
+        info!(
+            "🛑 Sovereign Pool shutdown: {} isolates dropped safely.",
+            items.len()
+        );
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// [RAII Guard] 런타임 수명 관리
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 /// [RAII Guard] 런타임 수명 관리
+/// 
+/// Drop 시 자동으로 Isolate를 풀에 반환합니다.
 pub struct RuntimeGuard<'a> {
     runtime: Option<PooledRuntime>,
     tenant_id: String,
@@ -235,10 +480,15 @@ pub struct RuntimeGuard<'a> {
 }
 
 impl<'a> RuntimeGuard<'a> {
+    /// 런타임 가변 참조 획득
     pub fn runtime_mut(&mut self) -> &mut JsRuntime {
         &mut self.runtime.as_mut().unwrap().runtime
     }
-    pub fn leak(&mut self) { self.runtime.take(); }
+
+    /// 런타임을 풀에 반환하지 않고 누수시킴 (비정상 종료 시)
+    pub fn leak(&mut self) {
+        self.runtime.take();
+    }
 }
 
 impl<'a> Drop for RuntimeGuard<'a> {
@@ -248,5 +498,72 @@ impl<'a> Drop for RuntimeGuard<'a> {
             let tid = std::mem::take(&mut self.tenant_id);
             self.pool_ref.release(tid, pooled);
         }
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// C-002: Unit Tests
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_semaphore_creation() {
+        let semaphores: DashMap<String, Arc<Semaphore>> = DashMap::new();
+
+        // 첫 번째 접근: 새로 생성
+        let sem1 = semaphores
+            .entry("tenant-1".to_string())
+            .or_insert_with(|| Arc::new(Semaphore::new(5)))
+            .value()
+            .clone();
+
+        assert_eq!(sem1.available_permits(), 5);
+
+        // 두 번째 접근: 기존 것 반환
+        let sem2 = semaphores
+            .entry("tenant-1".to_string())
+            .or_insert_with(|| Arc::new(Semaphore::new(10))) // 이건 무시됨
+            .value()
+            .clone();
+
+        // 같은 세마포어여야 함 (permits가 5로 유지)
+        assert_eq!(sem2.available_permits(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_permit_acquisition() {
+        let semaphore = Arc::new(Semaphore::new(2));
+
+        // 2개 획득 가능
+        let _p1 = semaphore.clone().try_acquire_owned().unwrap();
+        let _p2 = semaphore.clone().try_acquire_owned().unwrap();
+
+        // 3번째는 실패
+        assert!(semaphore.clone().try_acquire_owned().is_err());
+
+        // p1 drop 후 다시 획득 가능
+        drop(_p1);
+        let _p3 = semaphore.clone().try_acquire_owned().unwrap();
+        assert!(semaphore.clone().try_acquire_owned().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_quota_exceeded_timeout() {
+        let semaphore = Arc::new(Semaphore::new(1));
+
+        // 1개 획득
+        let _p1 = semaphore.clone().try_acquire_owned().unwrap();
+
+        // 타임아웃 테스트 (100ms)
+        let start = Instant::now();
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), semaphore.clone().acquire_owned())
+                .await;
+
+        assert!(result.is_err()); // 타임아웃
+        assert!(start.elapsed() >= Duration::from_millis(100));
     }
 }

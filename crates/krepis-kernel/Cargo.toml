@@ -37,6 +37,9 @@ sled = { workspace = true }
 lru = "0.12"
 parking_lot = "0.12"
 
+# C-002: Concurrent Hashmap for Bulkhead Pattern
+dashmap = "6.1"
+
 krepis-knul = { path = "../krepis-knul" }
 once_cell = "1.21.3"
 
