@@ -79,26 +79,28 @@ pub extern "C" fn initialize_kernel(buffer_ptr: *const u8, buffer_len: usize) ->
 
 #[no_mangle]
 pub extern "C" fn create_context(
-    request_id_ptr: *const u8,
-    request_id_len: usize,
-    is_turbo: bool,
+    buffer_ptr: *const u8,
+    buffer_len: usize,
 ) -> *mut FfiBuffer {
-    let request_id = unsafe {
-        let slice = slice::from_raw_parts(request_id_ptr, request_id_len);
-        String::from_utf8_lossy(slice).to_string()
+    let buffer = unsafe { slice::from_raw_parts(buffer_ptr, buffer_len) };
+    
+    let envelope = match KrepisContext::decode(buffer) {
+        Ok(mut ctx) => {
+            ctx.trace_id = uuid::Uuid::new_v4().to_string(); 
+            ctx.timestamp = now_ms();
+            
+            let request_id = ctx.request_id.clone();
+            FfiResponse::success(ctx.encode_to_vec(), request_id)
+        }
+        Err(e) => {
+            FfiResponse::error(
+                TenantError::Internal(format!("Decode failed: {}", e)),
+                "unknown".to_string(),
+                "system".to_string()
+            )
+        }
     };
     
-    let ctx = KrepisContext {
-        request_id: request_id.clone(),
-        tenant_id: String::from("default"),
-        priority: if is_turbo { 10 } else { 5 },
-        is_turbo_mode: is_turbo,
-        trace_id: uuid::Uuid::new_v4().to_string(),
-        timestamp: now_ms(),
-        metadata: Default::default(),
-    };
-
-    let envelope = FfiResponse::success(ctx.encode_to_vec(), request_id);
     FfiBuffer::from_vec(envelope.encode_to_vec())
 }
 

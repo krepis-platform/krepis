@@ -11,7 +11,19 @@
  * 3. AOT Validation - 부트스트랩 시점에 의존성 검증
  */
 
-import type { IKrepisContext } from "../context/IKrepisContext.ts";
+// Mock IKrepisContext for testing
+export interface IKrepisContext extends Disposable {
+  readonly requestId: string;
+  readonly tenantId: string;
+  readonly traceId: string;
+  readonly isTurboMode: boolean;
+  readonly timestamp: bigint;
+  readonly priority: number;
+  readonly binary: Uint8Array;
+  getMetadata(key: string): string | undefined;
+  getAllMetadata(): Readonly<Record<string, string>>;
+  [Symbol.dispose](): void;
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // [1] Service Identifier Types
@@ -131,21 +143,15 @@ export interface IScopedContainer extends Disposable {
 
 /**
  * Root Service Provider 인터페이스.
- * 
- * 애플리케이션 부트스트랩 시 생성되며, 
- * Context별 Scoped Container를 생성합니다.
  */
 export interface IServiceProvider {
   /**
-   * Singleton 서비스를 가져옵니다 (Context-free).
+   * Singleton 서비스를 가져옵니다.
    */
   getSingleton<T>(id: ServiceIdentifier<T>): T;
   
   /**
    * 새로운 Scoped Container를 생성합니다.
-   * 
-   * @param ctx - Context (Scoped 서비스 생성에 사용)
-   * @returns Scoped Container
    */
   createScope(ctx: IKrepisContext): IScopedContainer;
   
@@ -155,21 +161,8 @@ export interface IServiceProvider {
   has<T>(id: ServiceIdentifier<T>): boolean;
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// [5] Service Collection (Builder)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 /**
- * 서비스 등록 빌더.
- * 
- * @example
- * ```ts
- * const services = new ServiceCollection();
- * services.addSingleton(LOGGER, ConsoleLogger);
- * services.addScoped(USER_REPO, UserRepository, [DATABASE]);
- * 
- * const provider = services.build();
- * ```
+ * Service Collection 인터페이스 (빌더 패턴).
  */
 export interface IServiceCollection {
   addSingleton<T>(
@@ -177,42 +170,47 @@ export interface IServiceCollection {
     implementation: Constructor<T> | ((provider: IServiceProvider) => T),
     dependencies?: ServiceIdentifier<unknown>[]
   ): this;
-  
+
   addScoped<T>(
     id: ServiceIdentifier<T>,
     implementation: Constructor<T> | ((container: IScopedContainer) => T),
     dependencies?: ServiceIdentifier<unknown>[]
   ): this;
-  
+
   addTransient<T>(
     id: ServiceIdentifier<T>,
     implementation: Constructor<T> | ((container: IScopedContainer) => T),
     dependencies?: ServiceIdentifier<unknown>[]
   ): this;
-  
+
   build(): IServiceProvider;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// [6] Built-in Service Identifiers
+// [5] Built-in Tokens
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /**
- * 내장 서비스 식별자.
+ * ILogger 인터페이스.
  */
-export const KREPIS_CONTEXT = new InjectionToken<IKrepisContext>("IKrepisContext");
-export const LOGGER = new InjectionToken<ILogger>("ILogger");
-export const TELEMETRY = new InjectionToken<ITelemetry>("ITelemetry");
-
 export interface ILogger {
-  // any[] 대신 unknown[] 사용
   debug(message: string, ...args: unknown[]): void;
   info(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
   error(message: string, ...args: unknown[]): void;
 }
 
+/**
+ * ITelemetry 인터페이스.
+ */
 export interface ITelemetry {
-  recordMetric(name: string, value: number, ctx: IKrepisContext): void;
-  recordEvent(name: string, properties: Record<string, unknown>, ctx: IKrepisContext): void;
+  trackEvent(name: string, properties?: Record<string, unknown>): void;
+  trackMetric(name: string, value: number): void;
 }
+
+/**
+ * 내장 서비스 토큰들.
+ */
+export const KREPIS_CONTEXT = new InjectionToken<IKrepisContext>("KREPIS_CONTEXT");
+export const LOGGER = new InjectionToken<ILogger>("ILogger");
+export const TELEMETRY = new InjectionToken<ITelemetry>("ITelemetry");
