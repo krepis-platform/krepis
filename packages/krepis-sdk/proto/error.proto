@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package krepis.core;
+
+enum ErrorCode {
+    ERROR_CODE_UNKNOWN = 0;
+    ERROR_CODE_TENANT_INACTIVE = 1;
+    ERROR_CODE_TENANT_NOT_FOUND = 2;
+    ERROR_CODE_QUOTA_EXCEEDED = 10;
+    ERROR_CODE_ACQUIRE_TIMEOUT = 11;
+    ERROR_CODE_EXECUTION_TIMEOUT = 12;
+    ERROR_CODE_MEMORY_LIMIT_EXCEEDED = 13;
+    ERROR_CODE_PATH_DENIED = 20;
+    ERROR_CODE_PERMISSION_DENIED = 21;
+    ERROR_CODE_INTERNAL = 90;
+    ERROR_CODE_SERIALIZATION_FAILED = 91;
+    ERROR_CODE_RUNTIME_PANIC = 92;
+}
+
+enum ErrorCategory {
+    ERROR_CATEGORY_UNKNOWN = 0;
+    ERROR_CATEGORY_TRANSIENT = 1;
+    ERROR_CATEGORY_THROTTLING = 2;
+    ERROR_CATEGORY_CLIENT = 3;
+    ERROR_CATEGORY_SERVER = 4;
+    ERROR_CATEGORY_TIMEOUT = 5;
+}
+
+enum MessageType {
+    MESSAGE_TYPE_UNKNOWN = 0;
+    MESSAGE_TYPE_CONTEXT = 1;
+    MESSAGE_TYPE_INIT_REQUEST = 2;
+    MESSAGE_TYPE_INIT_RESPONSE = 3;
+    MESSAGE_TYPE_EXECUTE_RESPONSE = 4;
+    MESSAGE_TYPE_FFI_RESPONSE = 5;
+    MESSAGE_TYPE_TURBO_BATCH_REQUEST = 100;
+    MESSAGE_TYPE_TURBO_BATCH_RESPONSE = 101;
+    MESSAGE_TYPE_KNUL_PACKET = 200;
+    MESSAGE_TYPE_KNUL_STREAM_INIT = 201;
+}
+
+message ResourceSnapshot {
+    uint32 current_concurrent = 1;
+    uint32 max_concurrent = 2;
+    uint64 heap_used_bytes = 3;
+    uint64 heap_limit_bytes = 4;
+    uint64 elapsed_ms = 5;
+    uint64 limit_ms = 6;
+}
+
+message ErrorMeta {
+    bool retryable = 1;
+    ErrorCategory category = 2;
+    uint64 retry_after_ms = 3;
+    uint32 attempt = 4;
+    uint32 max_attempts = 5;
+    ResourceSnapshot resource_snapshot = 10;
+    map<string, string> extensions = 15;
+}
+
+message KrepisError {
+    ErrorCode code = 1;
+    string message = 2;
+    ErrorMeta meta = 3;
+    string tenant_id = 10;
+    string request_id = 11;
+    string trace_id = 12;
+    int64 timestamp = 13;
+    string stack_trace = 20;
+    string source = 21;
+}
+
+message FfiResponse {
+    oneof result {
+        bytes success_payload = 1;
+        KrepisError error = 2;
+    }
+    string request_id = 10;
+    string trace_id = 11;
+    uint64 duration_us = 12;
+    uint32 protocol_version = 15;
+}
+
+message FfiEnvelope {
+    uint32 protocol_version = 1;
+    MessageType message_type = 2;
+    bytes payload = 3;
+    map<string, bytes> extensions = 10;
+}
