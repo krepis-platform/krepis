@@ -10,6 +10,20 @@ message KrepisContext {
   string trace_id = 5;
   int64 timestamp = 6;
   map<string, string> metadata = 7;
+  
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // Zero-Copy Extensions (v2.0)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  
+  // Tenant tier for performance routing
+  // Maps to domain::TenantTier:
+  // 0 = Free, 1 = Standard, 2 = Turbo, 3 = Pro, 4 = Enterprise
+  uint32 tier = 8;
+  
+  // Physical slot index in shared memory pool (Turbo only)
+  // 0xFFFFFFFF = Not using Turbo (Standard FFI)
+  // 0-N = Turbo slot index
+  uint32 turbo_slot = 9;
 }
 
 message KnulConfig {

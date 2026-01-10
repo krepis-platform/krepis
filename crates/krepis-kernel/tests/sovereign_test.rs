@@ -8,14 +8,14 @@ use prost::Message;
 use krepis_kernel::proto::KrepisContext;
 use krepis_kernel::domain::journal::{TransactionLog, LogStatus};
 use krepis_kernel::adapters::storage::SovereignJournal;
-use krepis_kernel::ops::{self, SovereignStats};
+use krepis_kernel::runtime_ops::{self, SovereignStats};
 
 deno_core::extension!(
     krepis_test,
     ops = [
-        ops::bridge::op_get_context,
-        ops::bridge::op_check_permission,
-        ops::bridge::op_increment_stats,
+        runtime_ops::bridge::op_get_context,
+        runtime_ops::bridge::op_check_permission,
+        runtime_ops::bridge::op_increment_stats,
     ],
 );
 

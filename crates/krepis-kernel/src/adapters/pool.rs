@@ -17,7 +17,7 @@ use crate::adapters::storage::SovereignJournal;
 use crate::domain::{LogStatus, TransactionLog, now_ms};
 use crate::domain::pool::PoolPolicy;
 use crate::domain::tenant::{TenantError, TenantMetadata, TenantTier};
-use crate::ops::{self, SovereignStats};
+use crate::runtime_ops::{self, SovereignStats};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // [Hexagonal Adapter] Sovereign Pool with C-002 Bulkhead Pattern
@@ -326,7 +326,7 @@ impl SovereignPool {
         let stats = Rc::new(RefCell::new(SovereignStats::default()));
 
         // 2. Extension 초기화 (v0.316 매크로 방식 준수)
-        let mut ext = ops::krepis_sovereign::init_ops();
+        let mut ext = runtime_ops::krepis_sovereign::init_ops();
         let journal = self.journal.clone();
         let tenant_meta = tenant.clone();
 

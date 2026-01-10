@@ -9,10 +9,14 @@
     // Deno: 공식 바이너리 설치 방식
     "ghcr.io/devcontainers/features/common-utils:1": {
       "configureZshAsDefaultShell": true
+    },
+    // Java 설치 자동화
+    "ghcr.io/devcontainers/features/java:1": {
+        "version": "17"
     }
   },
   // 코드스페이스 내에서 Deno를 수동 설치하여 충돌 방지
-  "postCreateCommand": "curl -fsSL https://deno.land/x/install/install.sh | sh && echo 'export DENO_INSTALL=\"$HOME/.deno\"' >> ~/.zshrc && echo 'export PATH=\"$DENO_INSTALL/bin:$PATH\"' >> ~/.zshrc && rustup component add rust-analyzer",
+  "postCreateCommand": "curl -fsSL https://deno.land/x/install/install.sh | sh && echo 'export DENO_INSTALL=\"$HOME/.deno\"' >> ~/.zshrc && echo 'export PATH=\"$DENO_INSTALL/bin:$PATH\"' >> ~/.zshrc && rustup component add rust-analyzer && wget https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar -P /usr/local/bin",
   "customizations": {
     "vscode": {
       "extensions": [

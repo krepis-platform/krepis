@@ -4,14 +4,42 @@ package krepis.core;
 
 enum ErrorCode {
     ERROR_CODE_UNKNOWN = 0;
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Client Errors (1000-1099) - Tenant-related issues
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
     ERROR_CODE_TENANT_INACTIVE = 1;
     ERROR_CODE_TENANT_NOT_FOUND = 2;
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Quota Errors (2000-2099) - Resource exhaustion
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
     ERROR_CODE_QUOTA_EXCEEDED = 10;
     ERROR_CODE_ACQUIRE_TIMEOUT = 11;
     ERROR_CODE_EXECUTION_TIMEOUT = 12;
     ERROR_CODE_MEMORY_LIMIT_EXCEEDED = 13;
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Security Errors (2000-2099) - Access control
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
     ERROR_CODE_PATH_DENIED = 20;
     ERROR_CODE_PERMISSION_DENIED = 21;
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Turbo Errors (3000-3099) - Zero-copy specific issues
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    ERROR_CODE_TURBO_ALLOCATION_FAILED = 30;    // 3001 in domain
+    ERROR_CODE_TURBO_MEMORY_CORRUPTION = 31;     // 3004 in domain
+    ERROR_CODE_INVALID_TIER_UPGRADE = 32;        // 1003 in domain (client error)
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Internal Errors (9000-9999) - System failures
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
     ERROR_CODE_INTERNAL = 90;
     ERROR_CODE_SERIALIZATION_FAILED = 91;
     ERROR_CODE_RUNTIME_PANIC = 92;
@@ -19,11 +47,11 @@ enum ErrorCode {
 
 enum ErrorCategory {
     ERROR_CATEGORY_UNKNOWN = 0;
-    ERROR_CATEGORY_TRANSIENT = 1;
-    ERROR_CATEGORY_THROTTLING = 2;
-    ERROR_CATEGORY_CLIENT = 3;
-    ERROR_CATEGORY_SERVER = 4;
-    ERROR_CATEGORY_TIMEOUT = 5;
+    ERROR_CATEGORY_TRANSIENT = 1;      // Retry recommended
+    ERROR_CATEGORY_THROTTLING = 2;     // Rate limit, retry with backoff
+    ERROR_CATEGORY_CLIENT = 3;         // Client error, do not retry
+    ERROR_CATEGORY_SERVER = 4;         // Server error, retry possible
+    ERROR_CATEGORY_TIMEOUT = 5;        // Timeout, retry with longer deadline
 }
 
 enum MessageType {
@@ -46,6 +74,13 @@ message ResourceSnapshot {
     uint64 heap_limit_bytes = 4;
     uint64 elapsed_ms = 5;
     uint64 limit_ms = 6;
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Zero-Copy Extensions (v2.0)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    // Turbo pool utilization percentage (0-100)
+    uint32 turbo_utilization = 7;
 }
 
 message ErrorMeta {

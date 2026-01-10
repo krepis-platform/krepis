@@ -11,6 +11,12 @@ coverage/
 # Krepis specific
 .krepis/
 
+# TLA+ TLC 생성 파일들
+*_TTrace_*.tla
+*.bin
+*.out
+states/
+
 # IDEs
 .vscode/
 .idea/
