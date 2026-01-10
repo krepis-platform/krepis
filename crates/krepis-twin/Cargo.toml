@@ -1,0 +1,64 @@
+[package]
+name = "krepis-twin"
+version = "0.1.0"
+edition = "2021"
+authors = ["Krepis Team"]
+license = "Apache-2.0"
+description = "Krepis Digital Twin Simulator - Trinity Architecture Implementation"
+repository = "https://github.com/krepis/krepis"
+
+[lib]
+name = "krepis_twin"
+path = "src/lib.rs"
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1.42", features = ["full"] }
+
+# Synchronization Primitives
+parking_lot = "0.12"
+dashmap = "6.1"
+
+# Error Handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization (for trace export)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Data Structures
+lru = "0.12"
+
+# Time utilities
+crossbeam = "0.8"
+
+kani-verifier = { version = "0.57", optional = true }
+
+[dev-dependencies]
+# Testing
+criterion = "0.5"
+proptest = "1.5"
+
+[features]
+default = []
+# Enable Kani formal verification
+verification = ["dep:kani-verifier"]
+
+# [[bench]]
+# name = "clock_bench"
+# harness = false
+
+# [[bench]]
+# name = "memory_bench"
+# harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

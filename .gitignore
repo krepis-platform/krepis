@@ -16,6 +16,8 @@ coverage/
 *.bin
 *.out
 states/
+MC.out
+MC.cfg
 
 # IDEs
 .vscode/
