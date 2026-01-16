@@ -9,6 +9,8 @@
 * **바이너리 위치 (Native Kernel): Rust 빌드 결과물(.so, .dll, .dylib)은 crates/krepis-kernel/target/release에서 관리되며, 배포 시 packages/core/bin으로 플랫폼별(target triple) 식별자와 함께 아카이빙됩니다.**  
 * **FFI 정의 자동 동기화: NAPI-RS 대신 Deno FFI를 사용하므로, Rust의 struct와 fn을 분석하여 Deno가 이해할 수 있는 UnsafePointer 기반의 \*\*bindings.ts\*\*를 자동 생성(Codegen)합니다. 이를 통해 TS 레이어는 런타임에 네이티브 심볼을 타입 안전하게 호출합니다.**
 
+[See Also](../framework/kernel/04_FFI_MEMORY_SAFETY.md)
+
 ## **1.2 Sovereign 태스크 의존성 설계 (Dependency Graph)**
 
 **Turborepo 대신 \*\*deno task\*\*와 \*\*cargo\*\*의 고유 기능을 조합하여 병렬성과 결정성을 확보합니다.**
