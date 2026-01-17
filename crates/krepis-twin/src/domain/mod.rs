@@ -14,6 +14,11 @@
 //! │  ├─ ProductionBackend          ├─ ProductionBackend        │
 //! │  └─ VerificationBackend        └─ VerificationBackend      │
 //! │                                                             │
+//! │                   Scheduler Module (NEW!)                   │
+//! │                   ├─ SchedulerOracle<SB, CB>               │
+//! │                   ├─ ProductionSchedulerBackend            │
+//! │                   └─ VerificationSchedulerBackend          │
+//! │                                                             │
 //! │                   Simulation Module                         │
 //! │                   ├─ Simulator<MB, CB>                      │
 //! │                   └─ EventDispatcher                        │
@@ -85,37 +90,70 @@
 //! let graph = tracing::CausalityGraph::from_trace(tracer.events());
 //! ```
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Module Declarations
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 pub mod clock;
 pub mod memory;
+pub mod scheduler;
 pub mod simulation;
 pub mod tracing;
 
-// Re-export commonly used types
-pub use simulation::{EventDispatcher, Simulator};
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Public Re-exports - Flattened API for Convenience
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Re-export clock types
+// Re-export all public types from submodules so users can write:
+//   use krepis_twin::domain::VirtualClock;
+// instead of:
+//   use krepis_twin::domain::clock::VirtualClock;
+
+// Clock types
 pub use clock::{
+    ClockBackend,
     EventId,
     EventPayload,
     LamportClock,
+    ProductionBackend as ProductionClockBackend,
     ScheduledEvent,
     TimeMode,
+    VerificationBackend as VerificationClockBackend,
     VirtualClock,
     VirtualTimeNs,
 };
 
-// Re-export memory types
+// Memory types
 pub use memory::{
     Address,
-    Value,
-    CoreId,
-    StoreEntry,
-    MemoryOp,
+    ConfigurableBackend,
     ConsistencyModel,
+    CoreId,
+    MemoryBackend,
     MemoryConfig,
+    MemoryOp,
+    ProductionBackend as ProductionMemoryBackend,
     SimulatedMemory,
     StoreBuffer,
+    StoreEntry,
+    Value,
+    VerificationBackend as VerificationMemoryBackend,
 };
+
+// Scheduler types (NEW!)
+pub use scheduler::{
+    SchedulerBackend,
+    SchedulerBackendExt,
+    SchedulerError,
+    SchedulingStrategy,
+    TaskId,
+    //ThreadId, Same Name It will be change...
+    ThreadState,
+};
+
+// Simulation types
+pub use simulation::{EventDispatcher, Simulator};
+
 
 // Re-export tracing types (updated for zero-cost design)
 pub use tracing::{
