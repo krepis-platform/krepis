@@ -263,35 +263,24 @@ pub trait SchedulerBackend {
         }
     }
 
-    /// Register an event as belonging to a specific thread
-    ///
-    /// # Purpose
-    ///
-    /// The SchedulerBackend now tracks which thread owns each event. This allows
-    /// us to check if an event's thread is runnable without storing a separate
-    /// mapping in SchedulerOracle.
-    ///
-    /// # Arguments
-    ///
-    /// - `event_id`: The event to register
-    /// - `thread_id`: The thread that owns this event
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())`: Event registered successfully
-    /// - `Err(SchedulerError::QueueFull)`: No space for more events (verification only)
-    ///
-    /// # Implementation Notes
-    ///
-    /// - **ProductionBackend**: Uses HashMap, dynamic capacity
-    /// - **VerificationBackend**: Uses fixed array [MAX_EVENTS], bounded
+    /// Register an event as belonging to a thread
     ///
     /// # Example
     ///
     /// ```rust
-    /// // After scheduling an event in the clock:
-    /// let event_id = clock.schedule(100, payload)?;
-    /// backend.register_event(event_id, thread_id)?;
+    /// use krepis_twin::domain::scheduler::{ProductionSchedulerBackend, SchedulerBackend, ThreadId};
+    /// use krepis_twin::domain::clock::{ProductionBackend as ClockBackend, VirtualClock, TimeMode, EventPayload, EventId};
+    ///
+    /// let mut backend = ProductionSchedulerBackend::new(4);
+    /// let mut clock = VirtualClock::new(ClockBackend::new(), TimeMode::EventDriven);
+    /// let thread_id = ThreadId::new(0);
+    ///
+    /// // Schedule an event
+    /// let payload = EventPayload::MemoryWriteSync { core: 0, addr: 0x1000, value: 42 };
+    /// let event_id = clock.schedule(100, payload).unwrap();
+    ///
+    /// // Register it with the backend
+    /// backend.register_event(event_id, thread_id).unwrap();
     /// ```
     fn register_event(
         &self,
@@ -299,74 +288,84 @@ pub trait SchedulerBackend {
         thread_id: ThreadId,
     ) -> Result<(), SchedulerError>;
 
-    /// Get the thread that owns a specific event
+    /// Get the thread that owns an event
     ///
-    /// # Arguments
-    ///
-    /// - `event_id`: The event to query
-    ///
-    /// # Returns
-    ///
-    /// - `Some(ThreadId)`: The thread that owns this event
-    /// - `None`: No thread owns this event (event not registered or already executed)
-    ///
-    /// # Performance Note
-    ///
-    /// This method is called in the hot path (during execute_next), so it must be
-    /// fast. Production uses O(1) HashMap lookup. Verification uses O(N) linear
-    /// search but N is small (MAX_EVENTS = 16).
+    /// Returns `None` if the event is not registered.
     ///
     /// # Example
     ///
     /// ```rust
-    /// // During event execution:
-    /// let Some(thread_id) = backend.get_event_owner(event_id) else {
-    ///     // Event has no owner, skip it
-    ///     continue;
-    /// };
+    /// use krepis_twin::domain::scheduler::{ProductionSchedulerBackend, SchedulerBackend, ThreadId};
+    /// use krepis_twin::domain::clock::{ProductionBackend as ClockBackend, VirtualClock, TimeMode, EventPayload, EventId};
+    ///
+    /// let mut backend = ProductionSchedulerBackend::new(4);
+    /// let mut clock = VirtualClock::new(ClockBackend::new(), TimeMode::EventDriven);
+    /// let thread_id = ThreadId::new(0);
+    ///
+    /// // Schedule and register event
+    /// let payload = EventPayload::MemoryWriteSync { core: 0, addr: 0x1000, value: 42 };
+    /// let event_id = clock.schedule(100, payload).unwrap();
+    /// backend.register_event(event_id, thread_id).unwrap();
+    ///
+    /// // Check ownership
+    /// if let Some(owner) = backend.get_event_owner(event_id) {
+    ///     assert_eq!(owner, thread_id);
+    /// }
     /// ```
     fn get_event_owner(&self, event_id: EventId) -> Option<ThreadId>;
 
-    /// Unregister an event (remove ownership tracking)
-    ///
-    /// # Purpose
-    ///
-    /// When an event is executed or removed from the queue, we need to clean up
-    /// the ownership tracking to avoid memory leaks.
-    ///
-    /// # Arguments
-    ///
-    /// - `event_id`: The event to unregister
-    ///
-    /// # Implementation Notes
-    ///
-    /// If the event_id doesn't exist, this is a no-op (idempotent).
+    /// Unregister an event (when it's been executed)
     ///
     /// # Example
     ///
     /// ```rust
-    /// // After executing an event:
+    /// use krepis_twin::domain::scheduler::{ProductionSchedulerBackend, SchedulerBackend, ThreadId};
+    /// use krepis_twin::domain::clock::{ProductionBackend as ClockBackend, VirtualClock, TimeMode, EventPayload, EventId};
+    ///
+    /// let mut backend = ProductionSchedulerBackend::new(4);
+    /// let mut clock = VirtualClock::new(ClockBackend::new(), TimeMode::EventDriven);
+    /// let thread_id = ThreadId::new(0);
+    ///
+    /// // Schedule and register event
+    /// let payload = EventPayload::MemoryWriteSync { core: 0, addr: 0x1000, value: 42 };
+    /// let event_id = clock.schedule(100, payload).unwrap();
+    /// backend.register_event(event_id, thread_id).unwrap();
+    ///
+    /// // After execution, unregister
     /// backend.unregister_event(event_id);
+    ///
+    /// // Verify it's gone
+    /// assert_eq!(backend.get_event_owner(event_id), None);
     /// ```
     fn unregister_event(&self, event_id: EventId);
 
     /// Clear all event registrations
     ///
-    /// # Purpose
-    ///
-    /// When resetting the scheduler to Init state, we need to clear all event
-    /// ownership tracking.
-    ///
-    /// # TLA+ Correspondence
-    ///
-    /// This is part of returning to the Init state where no events are scheduled.
+    /// Called when resetting the scheduler.
     ///
     /// # Example
     ///
     /// ```rust
-    /// // During scheduler reset:
-    /// backend.reset();        // Reset thread states
-    /// backend.clear_events(); // Clear event ownership
+    /// use krepis_twin::domain::scheduler::{ProductionSchedulerBackend, SchedulerBackend, ThreadId};
+    /// use krepis_twin::domain::clock::{ProductionBackend as ClockBackend, VirtualClock, TimeMode, EventPayload};
+    ///
+    /// let mut backend = ProductionSchedulerBackend::new(4);
+    /// let mut clock = VirtualClock::new(ClockBackend::new(), TimeMode::EventDriven);
+    ///
+    /// // Register some events
+    /// let payload = EventPayload::MemoryWriteSync { core: 0, addr: 0x1000, value: 42 };
+    /// let e1 = clock.schedule(100, payload.clone()).unwrap();
+    /// let e2 = clock.schedule(200, payload).unwrap();
+    /// backend.register_event(e1, ThreadId::new(0)).unwrap();
+    /// backend.register_event(e2, ThreadId::new(1)).unwrap();
+    ///
+    /// // Reset everything
+    /// backend.reset();
+    /// backend.clear_events();
+    ///
+    /// // All events should be cleared
+    /// assert_eq!(backend.get_event_owner(e1), None);
+    /// assert_eq!(backend.get_event_owner(e2), None);
     /// ```
     fn clear_events(&self);
 

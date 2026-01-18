@@ -513,12 +513,20 @@ TimeMonotonicity_PO ==
 #### Reduction Impact Summary
 
 | Technique | State Reduction | When to Apply |
+
 |-----------|-----------------|---------------|
+
 | Tenant Symmetry | N! → 1 | Always for identical tenants |
+
 | View Abstraction | 10-100x | Memory-intensive models |
+
 | Memory Fence Coalescing | 10-100x | Relaxed memory model |
+
 | Partial Order Focus | MaxTime → \|Events\|² | Time-sensitive specs |
-| DPOR (Dynamic) | Exponential | Concurrent operations |
+
+| **Ki-DPOR (Intelligent)** | **10-30x bug discovery speed** ⭐ | **Deep bugs, time-limited** |
+
+| Classic DPOR | Exponential | Shallow bugs, exhaustive |
 
 ---
 

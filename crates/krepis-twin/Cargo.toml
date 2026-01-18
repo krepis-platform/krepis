@@ -38,6 +38,7 @@ crossbeam = "0.8"
 
 kani-verifier = { version = "0.57", optional = true }
 rand = "0.9.2"
+petgraph = "0.8.3"
 
 [dev-dependencies]
 # Testing
@@ -47,8 +48,9 @@ proptest = "1.5"
 [features]
 default = ["production"]
 # Enable Kani formal verification
-verification = ["dep:kani-verifier"]
+verification = ["twin", "dep:kani-verifier"]
 production = ["dashmap"]
+twin = []
 
 # [[bench]]
 # name = "clock_bench"

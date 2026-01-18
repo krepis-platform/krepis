@@ -189,6 +189,10 @@ pub use tracing::{
     event::{ThreadId as TracingThreadId, MemAddr, LamportTimestamp, MAX_THREADS},
 };
 
+pub mod resources; 
+// Re-exports
+pub use resources::{ResourceTracker, DefaultTracker, ThreadId as ResourceThreadId, ResourceId};
+
 /// Production simulator with maximum performance
 ///
 /// # Configuration

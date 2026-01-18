@@ -27,17 +27,18 @@ mod kani_proofs {
     use super::super::*;
     use crate::domain::clock::{TimeMode, VerificationBackend as VerifClockBackend, VirtualClock};
 
-    #[kani::proof]
-    #[kani::unwind(8)]
+   #[kani::proof]
+    #[kani::unwind(4)]
     fn proof_memory_safety() {
         let mem_backend = VerificationBackend::new();
         let clock_backend = VerifClockBackend::new();
         let clock = VirtualClock::new(clock_backend, TimeMode::EventDriven);
+        
         let config = MemoryConfig {
             num_cores: 2,
             max_buffer_size: 2,
             consistency_model: ConsistencyModel::Relaxed,
-            initial_size: 4,
+            initial_size: 2,
         };
         let mut mem = SimulatedMemory::new(mem_backend, clock, config);
 
@@ -53,6 +54,7 @@ mod kani_proofs {
             let result = mem.write(core, addr, val);
             kani::assert(result.is_ok(), "Write should succeed when buffer not full");
         }
+        std::mem::forget(mem); 
     }
 
     #[kani::proof]

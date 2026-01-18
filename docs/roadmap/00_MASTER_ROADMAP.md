@@ -486,23 +486,67 @@ Krepis는:
 
 ## 🚀 Next Actions
 
-### This Week (2026-01-19 ~ 01-26)
+**⏳ 대기 중 (6주 완성 목표):**
 
-**우선순위 1:** SchedulerOracle 통합 완료
-- [ ] oracle.rs 구현 완성
-- [ ] Simulator 통합
-- [ ] Integration tests 작성
+Week 1-2: **Resource Tracking** ⭐ Ki-DPOR 선행조건
 
-**우선순위 2:** ThreadStates 구현 시작
-- [ ] TLA+ 스펙 리뷰
-- [ ] Rust 타입 정의
-- [ ] State transition logic
+  - [ ] Mutex/Semaphore state tracking
 
-### Next 4 Weeks
+  - [ ] Waiting thread queue
 
-**Week 2-3:** ThreadStates + Dependencies 완성  
-**Week 4:** DPOR 알고리즘 구현  
-**Week 5:** Twin 100% 완성 + 문서화
+  - [ ] Cycle detection (potential deadlock)
+
+  - [ ] Interleaving history tracking
+
+  - [ ] Code coverage (PC tracking)
+
+
+
+Week 3-4: **Classic DPOR** (Baseline)
+
+  - [ ] Stack-based state exploration
+
+  - [ ] Partial order reduction
+
+  - [ ] Benchmark baseline 측정
+
+
+
+Week 5-6: **Ki-DPOR** (Innovation) ⭐⭐⭐
+
+  - [ ] Priority Queue infrastructure
+
+  - [ ] Heuristic Engine implementation
+
+  - [ ] Contention/Interleaving/Novelty scoring
+
+  - [ ] Hybrid mode (Intelligent + Exhaustive)
+
+  - [ ] Benchmark: 10x+ improvement 증명
+
+  - [ ] 논문 작성 준비
+
+✅ 업데이트 완료 체크리스트
+
+[x] crates/krepis-twin/README.md Section 3.3 완전 재작성
+
+[x] Ki-DPOR 알고리즘 설명 추가
+
+[x] A* 공식 (f(n) = g(n) + h(n)) 문서화
+
+[x] Heuristic 엔진 상세 설명
+
+[x] Resource Tracker 선행조건 명시
+
+[x] Hybrid Strategy 권장사항 추가
+
+[x] 성능 비교 표 추가
+
+[x] TLA+ 확장 스펙 추가
+
+[x] Mermaid 다이어그램 추가
+
+[x] 로드맵 업데이트
 
 ---
 

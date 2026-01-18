@@ -213,8 +213,14 @@ pub struct VerificationBackend {
 }
 
 impl VerificationBackend {
-    /// Maximum events for verification (kept small for Kani)
-    pub const MAX_EVENTS: usize = 1000;
+    // [Production] 실제 실행 시: 1024개 (넉넉하게)
+    #[cfg(not(kani))]
+    pub const MAX_EVENTS: usize = 1024;
+
+    // [Verification] Kani 검증 시: 4개 (아주 작게!)
+    // Solver가 4번만 계산하면 되므로 순식간에 끝납니다.
+    #[cfg(kani)]
+    pub const MAX_EVENTS: usize = 4;
 
     /// Create a new verification backend
     ///

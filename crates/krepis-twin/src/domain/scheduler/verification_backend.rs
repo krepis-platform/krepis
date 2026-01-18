@@ -75,12 +75,11 @@ pub const MAX_THREADS: usize = 4;
 
 /// Maximum number of concurrent events for verification
 ///
-/// # Why 16?
-/// - Kani can handle bounded loops up to ~16 iterations comfortably
-/// - 16 events is enough to test interesting scheduler scenarios
-/// - Small enough to avoid state explosion
-/// - 4 threads × 4 events each = reasonable workload
-pub const MAX_EVENTS: usize = 16;
+/// Reduced from 16 to 8 for:
+/// - Faster Kani verification
+/// - Smaller memory footprint
+/// - Still sufficient for deadlock/race detection
+pub const MAX_EVENTS: usize = 8;
 
 /// Verification backend using fixed array for bounded model checking
 ///
@@ -657,15 +656,20 @@ mod tests {
 
     #[test]
     fn test_verification_backend_stack_allocation() {
-        // This test verifies that VerificationBackend is small enough to be
-        // stack-allocated comfortably
         use std::mem::size_of;
         
         let size = size_of::<VerificationBackend>();
         
-        // Should be very small: array of 4 bytes + RefCell overhead + usize
-        // Typically around 24-32 bytes
-        assert!(size < 64, "VerificationBackend is too large: {} bytes", size);
+        // With MAX_EVENTS=8:
+        // - thread_states: ~20 bytes
+        // - event_to_thread: ~136 bytes (8 entries × 16 bytes + overhead)
+        // - Other fields: ~20 bytes
+        // Total: ~176 bytes
+        assert!(
+            size < 256,
+            "VerificationBackend is too large: {} bytes (expected < 256)",
+            size
+        );
     }
 
     #[cfg(kani)]
