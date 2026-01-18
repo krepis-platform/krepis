@@ -17,7 +17,7 @@ tokio = { version = "1.42", features = ["full"] }
 
 # Synchronization Primitives
 parking_lot = "0.12"
-dashmap = "6.1"
+dashmap = { version = "6.1", optional = true }
 
 # Error Handling
 anyhow = "1.0"
@@ -45,9 +45,10 @@ criterion = "0.5"
 proptest = "1.5"
 
 [features]
-default = []
+default = ["production"]
 # Enable Kani formal verification
 verification = ["dep:kani-verifier"]
+production = ["dashmap"]
 
 # [[bench]]
 # name = "clock_bench"

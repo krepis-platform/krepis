@@ -140,16 +140,22 @@ pub use memory::{
     VerificationBackend as VerificationMemoryBackend,
 };
 
-// Scheduler types (NEW!)
+// Scheduler types
 pub use scheduler::{
     SchedulerBackend,
     SchedulerBackendExt,
     SchedulerError,
+    SchedulerOracle,
     SchedulingStrategy,
     TaskId,
-    //ThreadId, Same Name It will be change...
+    ThreadId,
     ThreadState,
+    VerificationScheduler,
+    VerificationSchedulerBackend,
 };
+
+#[cfg(not(kani))]
+pub use scheduler::{ProductionScheduler, ProductionSchedulerBackend};
 
 // Simulation types
 pub use simulation::{EventDispatcher, Simulator};
@@ -180,7 +186,7 @@ pub use tracing::{
     VerificationTracer,
     
     // Re-export from event module
-    event::{ThreadId, MemAddr, LamportTimestamp, MAX_THREADS},
+    event::{ThreadId as TracingThreadId, MemAddr, LamportTimestamp, MAX_THREADS},
 };
 
 /// Production simulator with maximum performance
@@ -399,7 +405,8 @@ impl ProductionSimulatorBuilder {
     ///     .build_with_tracer();
     ///
     /// // Use tracer to record events...
-    /// let thread_id = ThreadId::new(0);
+    /// // Note: TracingThreadId is different from scheduler::ThreadId
+    /// let thread_id = TracingThreadId::new(0);
     /// let meta = tracer.new_metadata(thread_id).unwrap();
     /// ```
     pub fn build_with_tracer(self) -> (ProductionSimulator, ProductionTracer) {
@@ -598,7 +605,7 @@ mod tests {
     fn test_tracer_standalone() {
         let mut tracer = ProductionTracer::with_capacity(100);
         
-        let thread_id = ThreadId::new(0);
+        let thread_id = TracingThreadId::new(0);
         let meta = tracer.new_metadata(thread_id).unwrap();
         assert_eq!(meta.timestamp.0, 1);
         
@@ -621,7 +628,7 @@ mod tests {
     fn test_verification_tracer_standalone() {
         let mut tracer = VerificationTracer::new_verification();
         
-        let thread_id = ThreadId::new(0);
+        let thread_id = TracingThreadId::new(0);
         let meta = tracer.new_metadata(thread_id).unwrap();
         assert_eq!(meta.timestamp.0, 1);
         
@@ -672,9 +679,9 @@ mod tests {
         
         // Record sequence of events
         let events = vec![
-            (ThreadId::new(0), "Event 1"),
-            (ThreadId::new(0), "Event 2"),
-            (ThreadId::new(1), "Event 3"),
+            (TracingThreadId::new(0), "Event 1"),
+            (TracingThreadId::new(0), "Event 2"),
+            (TracingThreadId::new(1), "Event 3"),
         ];
 
         for (tid, _desc) in events {
@@ -703,7 +710,7 @@ mod tests {
         let mut tracer = ProductionTracer::with_capacity(100);
         
         // Valid thread ID (within MAX_THREADS)
-        let valid_id = ThreadId::new(0);
+        let valid_id = TracingThreadId::new(0);
         assert!(tracer.new_metadata(valid_id).is_ok());
         
         // In debug mode, ThreadId::new() will panic for out-of-bounds
@@ -729,7 +736,7 @@ mod tests {
         
         // Fill up to capacity
         for i in 0..10 {
-            let tid = ThreadId::new((i % 2) as u32);
+            let tid = TracingThreadId::new((i % 2) as u32);
             let meta = tracer.new_metadata(tid).unwrap();
             let event = SimulationEvent::ClockTick {
                 meta,
@@ -751,7 +758,7 @@ mod tests {
         let mut tracer = ProductionTracer::with_capacity(10);
         
         for i in 0..5 {
-            let tid = ThreadId::new(0);
+            let tid = TracingThreadId::new(0);
             let meta = tracer.new_metadata(tid).unwrap();
             let event = SimulationEvent::ClockTick {
                 meta,

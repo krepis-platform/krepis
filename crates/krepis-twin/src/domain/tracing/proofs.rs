@@ -55,7 +55,7 @@ fn verify_tracer_causality_preservation() {
                         // Buffer full is acceptable
                         break;
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         // Other errors should not occur with valid inputs
                         kani::assert(false, "Unexpected error in record");
                     }
@@ -75,7 +75,7 @@ fn verify_tracer_causality_preservation() {
             // Causality is preserved
             kani::assert(true, "Causality verified");
         }
-        Err(TracingError::CausalityViolation { expected_min, received }) => {
+        Err(TracingError::CausalityViolation { expected_min: _, received: _ }) => {
             // If causality violation is detected, it must be a real violation
             // Since we have validate_causality=true, record() should have caught this
             kani::assert(false, "Causality violation should have been caught by record()");

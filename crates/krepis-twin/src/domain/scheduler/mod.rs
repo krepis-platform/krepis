@@ -113,10 +113,16 @@
 pub mod types;
 pub mod backend;
 
-// Future modules (to be implemented)
-// pub mod production_backend;
-// pub mod verification_backend;
-// pub mod oracle;
+#[cfg(not(kani))]
+pub mod production_backend;
+
+
+pub mod verification_backend;
+pub mod oracle;
+
+// Kani formal verification proofs
+#[cfg(kani)]
+pub mod proof;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Public Re-exports (Flattened API)
@@ -134,52 +140,52 @@ pub use types::{
 // Backend abstraction
 pub use backend::{SchedulerBackend, SchedulerBackendExt};
 
-// Backend implementations (when ready)
-// pub use production_backend::ProductionBackend as ProductionSchedulerBackend;
-// pub use verification_backend::VerificationBackend as VerificationSchedulerBackend;
+// Backend implementations
+#[cfg(not(kani))]
+pub use production_backend::ProductionBackend as ProductionSchedulerBackend;
+pub use verification_backend::VerificationBackend as VerificationSchedulerBackend;
 
-// SchedulerOracle (when ready)
-// pub use oracle::SchedulerOracle;
+// SchedulerOracle
+pub use oracle::SchedulerOracle;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Type Aliases for Convenience (Future)
+// Type Aliases for Convenience
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// These will be uncommented when oracle.rs is implemented
+/// Production scheduler with heap allocation and concurrent access
+///
+/// # Configuration
+/// - Backend: ProductionSchedulerBackend (DashMap for thread states)
+/// - Clock: ProductionBackend (BinaryHeap for events)
+/// - Strategy: Deterministic (PRODUCTION mode)
+///
+/// # Characteristics
+/// - Heap-allocated: Can handle thousands of threads
+/// - Thread-safe: Safe for concurrent access
+/// - Deterministic: Same inputs → same outputs
+/// - High performance: Lock-free hot paths
+#[cfg(not(kani))]
+pub type ProductionScheduler = SchedulerOracle<
+    ProductionSchedulerBackend,
+    crate::domain::clock::ProductionBackend,
+>;
 
-// /// Production scheduler with heap allocation and concurrent access
-// ///
-// /// # Configuration
-// /// - Backend: ProductionSchedulerBackend (DashMap for thread states)
-// /// - Clock: ProductionBackend (BinaryHeap for events)
-// /// - Strategy: Deterministic (PRODUCTION mode)
-// ///
-// /// # Characteristics
-// /// - Heap-allocated: Can handle thousands of threads
-// /// - Thread-safe: Safe for concurrent access
-// /// - Deterministic: Same inputs → same outputs
-// /// - High performance: Lock-free hot paths
-// pub type ProductionScheduler = SchedulerOracle<
-//     ProductionSchedulerBackend,
-//     crate::domain::clock::ProductionBackend,
-// >;
-
-// /// Verification scheduler with stack allocation and bounded capacity
-// ///
-// /// # Configuration
-// /// - Backend: VerificationSchedulerBackend (Fixed array for thread states)
-// /// - Clock: VerificationBackend (Fixed array for events)
-// /// - Strategy: Non-deterministic (VERIFICATION mode)
-// ///
-// /// # Characteristics
-// /// - Stack-allocated: No heap allocation
-// /// - Bounded: Fixed number of threads (typically 4)
-// /// - Single-threaded: No locks needed
-// /// - Kani-friendly: Suitable for formal verification
-// pub type VerificationScheduler = SchedulerOracle<
-//     VerificationSchedulerBackend,
-//     crate::domain::clock::VerificationBackend,
-// >;
+/// Verification scheduler with stack allocation and bounded capacity
+///
+/// # Configuration
+/// - Backend: VerificationSchedulerBackend (Fixed array for thread states)
+/// - Clock: VerificationBackend (Fixed array for events)
+/// - Strategy: Non-deterministic (VERIFICATION mode)
+///
+/// # Characteristics
+/// - Stack-allocated: No heap allocation
+/// - Bounded: Fixed number of threads (typically 4)
+/// - Single-threaded: No locks needed
+/// - Kani-friendly: Suitable for formal verification
+pub type VerificationScheduler = SchedulerOracle<
+    VerificationSchedulerBackend,
+    crate::domain::clock::VerificationBackend,
+>;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Documentation Tests

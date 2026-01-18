@@ -11,8 +11,18 @@
 //!
 //! The key insight is that the backend abstraction compiles away completely. When
 //! you write:
+//!
 //! ```rust
-//! let scheduler = SchedulerOracle::<ProductionBackend, _>::new(...);
+//! use krepis_twin::domain::scheduler::{ProductionScheduler, SchedulingStrategy};
+//! use krepis_twin::domain::clock::{ProductionBackend as ClockBackend, VirtualClock, TimeMode};
+//!
+//! // Create clock
+//! let clock = VirtualClock::new(ClockBackend::new(), TimeMode::EventDriven);
+//!
+//! // Create scheduler
+//! let scheduler = ProductionScheduler::new(clock, 4, SchedulingStrategy::Production);
+//!
+//! // Use the scheduler...
 //! ```
 //!
 //! The Rust compiler generates specialized code where every `backend.method()` call
@@ -29,6 +39,7 @@
 //! same verified algorithm in production with different capacity limits.
 
 use super::types::{SchedulerError, ThreadId, ThreadState};
+use crate::domain::clock::EventId;
 
 /// Backend abstraction for thread state management
 ///
@@ -144,25 +155,36 @@ pub trait SchedulerBackend {
         new_state: ThreadState,
     ) -> Result<ThreadState, SchedulerError>;
 
-    /// Check if a thread is runnable without borrowing
+    /// Check if a thread is runnable
+    ///
+    /// This is a convenience method that checks if a thread's state is RUNNABLE.
+    /// Implementations may override this for better performance, but the default
+    /// implementation is sufficient.
     ///
     /// # Arguments
     /// - `thread_id`: The thread to check
     ///
     /// # Returns
-    /// `true` if the thread exists and is in RUNNABLE state
+    /// `true` if the thread is in RUNNABLE state, `false` otherwise (including
+    /// if the thread_id is invalid)
     ///
-    /// # Design Rationale
+    /// # Example
     ///
-    /// This is a convenience method that combines `get_state()` and `is_runnable()`.
-    /// We provide it as a trait method so backends can optimize it. For example,
-    /// a backend might be able to check runnability without acquiring locks that
-    /// `get_state()` would need.
+    /// ```rust
+    /// use krepis_twin::domain::scheduler::{ProductionSchedulerBackend, SchedulerBackend, ThreadId, ThreadState};
     ///
-    /// # Default Implementation
+    /// let backend = ProductionSchedulerBackend::new(10);
+    ///
+    /// // Initially all threads are runnable
+    /// assert!(backend.is_runnable(ThreadId::new(0)));
+    ///
+    /// // Block a thread
+    /// backend.set_state(ThreadId::new(0), ThreadState::Blocked).unwrap();
+    /// assert!(!backend.is_runnable(ThreadId::new(0)));
+    /// ```
     ///
     /// The default implementation just calls `get_state()` and checks the result:
-    /// ```rust
+    /// ```ignore
     /// fn is_runnable(&self, thread_id: ThreadId) -> bool {
     ///     self.get_state(thread_id)
     ///         .map(|state| state.is_runnable())
@@ -240,6 +262,127 @@ pub trait SchedulerBackend {
             let _ = self.set_state(ThreadId::new(tid), ThreadState::Runnable);
         }
     }
+
+    /// Register an event as belonging to a specific thread
+    ///
+    /// # Purpose
+    ///
+    /// The SchedulerBackend now tracks which thread owns each event. This allows
+    /// us to check if an event's thread is runnable without storing a separate
+    /// mapping in SchedulerOracle.
+    ///
+    /// # Arguments
+    ///
+    /// - `event_id`: The event to register
+    /// - `thread_id`: The thread that owns this event
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())`: Event registered successfully
+    /// - `Err(SchedulerError::QueueFull)`: No space for more events (verification only)
+    ///
+    /// # Implementation Notes
+    ///
+    /// - **ProductionBackend**: Uses HashMap, dynamic capacity
+    /// - **VerificationBackend**: Uses fixed array [MAX_EVENTS], bounded
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // After scheduling an event in the clock:
+    /// let event_id = clock.schedule(100, payload)?;
+    /// backend.register_event(event_id, thread_id)?;
+    /// ```
+    fn register_event(
+        &self,
+        event_id: EventId,
+        thread_id: ThreadId,
+    ) -> Result<(), SchedulerError>;
+
+    /// Get the thread that owns a specific event
+    ///
+    /// # Arguments
+    ///
+    /// - `event_id`: The event to query
+    ///
+    /// # Returns
+    ///
+    /// - `Some(ThreadId)`: The thread that owns this event
+    /// - `None`: No thread owns this event (event not registered or already executed)
+    ///
+    /// # Performance Note
+    ///
+    /// This method is called in the hot path (during execute_next), so it must be
+    /// fast. Production uses O(1) HashMap lookup. Verification uses O(N) linear
+    /// search but N is small (MAX_EVENTS = 16).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // During event execution:
+    /// let Some(thread_id) = backend.get_event_owner(event_id) else {
+    ///     // Event has no owner, skip it
+    ///     continue;
+    /// };
+    /// ```
+    fn get_event_owner(&self, event_id: EventId) -> Option<ThreadId>;
+
+    /// Unregister an event (remove ownership tracking)
+    ///
+    /// # Purpose
+    ///
+    /// When an event is executed or removed from the queue, we need to clean up
+    /// the ownership tracking to avoid memory leaks.
+    ///
+    /// # Arguments
+    ///
+    /// - `event_id`: The event to unregister
+    ///
+    /// # Implementation Notes
+    ///
+    /// If the event_id doesn't exist, this is a no-op (idempotent).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // After executing an event:
+    /// backend.unregister_event(event_id);
+    /// ```
+    fn unregister_event(&self, event_id: EventId);
+
+    /// Clear all event registrations
+    ///
+    /// # Purpose
+    ///
+    /// When resetting the scheduler to Init state, we need to clear all event
+    /// ownership tracking.
+    ///
+    /// # TLA+ Correspondence
+    ///
+    /// This is part of returning to the Init state where no events are scheduled.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // During scheduler reset:
+    /// backend.reset();        // Reset thread states
+    /// backend.clear_events(); // Clear event ownership
+    /// ```
+    fn clear_events(&self);
+
+    /// Count how many registered events belong to runnable threads
+    ///
+    /// # Returns
+    /// The number of events whose owner thread is in RUNNABLE state
+    ///
+    /// # Usage
+    /// Used by `SchedulerOracle::is_idle()` to detect when all events
+    /// belong to blocked/completed threads.
+    ///
+    /// # Performance
+    /// - **ProductionBackend**: O(N) where N = registered events
+    /// - **VerificationBackend**: O(N) where N ≤ MAX_EVENTS (16)
+    fn count_runnable_events(&self) -> usize;
 }
 
 /// Extension trait for additional backend capabilities

@@ -356,7 +356,9 @@ pub enum SchedulerError {
     /// This error occurs when you try to schedule a task for a thread that does
     /// not exist in the backend's thread state table.
     InvalidThreadId {
+        /// The thread ID that was attempted to be accessed
         thread_id: ThreadId,
+        /// The maximum valid thread ID (exclusive)
         max_threads: usize,
     },
 
@@ -365,8 +367,11 @@ pub enum SchedulerError {
     /// For example, trying to schedule an event for a COMPLETED thread, or trying
     /// to execute an event from a BLOCKED thread.
     InvalidThreadState {
+        /// The thread ID whose state was invalid
         thread_id: ThreadId,
+        /// The current state of the thread
         current_state: ThreadState,
+        /// The expected state for the operation
         expected_state: ThreadState,
     },
 
@@ -376,7 +381,11 @@ pub enum SchedulerError {
     /// bounds for model checking. In ProductionBackend, the queue can grow very
     /// large before hitting this error.
     QueueFull {
-        max_events: usize,
+        /// The maximum number of events the queue can hold
+        max_events: usize,  // ← capacity 대신 max_events로 유지
+        
+        /// The number of events that were attempted to be added
+        attempted: usize,  // ← NEW FIELD 추가
     },
 
     /// Virtual time overflow (would exceed MaxTimeNs)
@@ -384,8 +393,11 @@ pub enum SchedulerError {
     /// This happens if you try to schedule an event so far in the future that
     /// it would overflow the time representation or exceed configured limits.
     TimeOverflow {
+        /// The current virtual time in nanoseconds
         current_time_ns: u64,
+        /// The delay that was attempted to be added
         delay_ns: u64,
+        /// The maximum time value supported
         max_time_ns: u64,
     },
 
@@ -417,8 +429,12 @@ impl fmt::Display for SchedulerError {
                     thread_id, current_state, expected_state
                 )
             }
-            SchedulerError::QueueFull { max_events } => {
-                write!(f, "Event queue full (max events: {})", max_events)
+            SchedulerError::QueueFull { max_events, attempted } => {
+                write!(
+                    f,
+                    "Event queue full (max: {}, attempted: {})",
+                    max_events, attempted
+                )
             }
             SchedulerError::TimeOverflow {
                 current_time_ns,

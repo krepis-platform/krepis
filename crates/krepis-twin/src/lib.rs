@@ -83,7 +83,11 @@ pub mod domain;
 pub mod infrastructure;
 pub mod adapters;
 
-// Re-export primary types
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Re-export Primary Types
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Clock types
 pub use domain::{
     EventId,
     EventPayload,
@@ -93,16 +97,37 @@ pub use domain::{
     VirtualClock,
     VirtualTimeNs,
 };
+
+// Memory types
 pub use domain::{
     Address,
-    Value,
     CoreId,
-    StoreEntry,
-    MemoryOp,
     ConsistencyModel,
     MemoryConfig,
+    MemoryOp,
     SimulatedMemory,
+    StoreEntry,
+    Value,
 };
+
+// Scheduler types (always available for both production and verification)
+pub use domain::{
+    SchedulerBackend,
+    SchedulerError,
+    SchedulerOracle,
+    SchedulingStrategy,
+    TaskId,
+    ThreadId,
+    ThreadState,
+    VerificationScheduler,
+    VerificationSchedulerBackend,
+};
+
+// Scheduler types (production only - excluded from Kani builds)
+#[cfg(not(kani))]
+pub use domain::{ProductionScheduler, ProductionSchedulerBackend};
+
+// Simulation types
 pub use domain::EventDispatcher;
 // pub use adapters::Simulator;  // TODO: Step 6
 
@@ -124,5 +149,46 @@ mod tests {
     #[test]
     fn test_tla_spec_version_defined() {
         assert_eq!(TLA_SPEC_VERSION, "1.0.0");
+    }
+
+    #[test]
+    fn test_scheduler_types_exported() {
+        // Verify core scheduler types are always available
+        let _tid = ThreadId::new(0);
+        let _task = TaskId::new(0);
+        let _state = ThreadState::Runnable;
+        let _strategy = SchedulingStrategy::Production;
+    }
+
+    #[test]
+    #[cfg(not(kani))]
+    fn test_production_scheduler_exported() {
+        // This test only compiles in non-Kani builds
+        // Verifies that ProductionScheduler is available in production
+        use domain::clock::{ProductionBackend as ProdClockBackend, TimeMode, VirtualClock};
+        
+        let clock_backend = ProdClockBackend::new();
+        let clock = VirtualClock::new(clock_backend, TimeMode::EventDriven);
+        
+        let _scheduler: ProductionScheduler = SchedulerOracle::new(
+            clock,
+            4,
+            SchedulingStrategy::Production,
+        );
+    }
+
+    #[test]
+    fn test_verification_scheduler_always_available() {
+        // This test compiles in both Kani and non-Kani builds
+        use domain::clock::{VerificationBackend as VerifClockBackend, TimeMode, VirtualClock};
+        
+        let clock_backend = VerifClockBackend::new();
+        let clock = VirtualClock::new(clock_backend, TimeMode::EventDriven);
+        
+        let _scheduler: VerificationScheduler = SchedulerOracle::new(
+            clock,
+            4,
+            SchedulingStrategy::Verification,
+        );
     }
 }
