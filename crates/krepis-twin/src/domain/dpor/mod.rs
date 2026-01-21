@@ -23,16 +23,21 @@
 //!
 //! ```text
 //! ┌─────────────────┐
-//! │ DporScheduler   │
+//! │ DporScheduler   │  (Classic - Stack-based DFS)
 //! ├─────────────────┤
 //! │ - stack         │  Execution trace
 //! │ - backtrack_sets│  Threads to explore at each depth
 //! │ - done_sets     │  Already explored threads
 //! │ - clock_vectors │  Causality tracking
 //! └─────────────────┘
-//!         │
-//!         ├─→ VectorClock (happens-before)
-//!         └─→ ResourceTracker (dependency detection)
+//!
+//! ┌─────────────────┐
+//! │ KiDporScheduler │  (Intelligent - Priority Queue A*)
+//! ├─────────────────┤
+//! │ - open_set      │  Priority queue of states
+//! │ - explored_set  │  Visited state signatures
+//! │ - heuristic     │  Danger-based prioritization
+//! └─────────────────┘
 //! ```
 //!
 //! # Feature Gating
@@ -45,12 +50,20 @@
 pub mod vector_clock;
 pub mod scheduler;
 
+// Ki-DPOR (A* based)
+pub mod ki_state;
+pub mod ki_scheduler;
+
 #[cfg(kani)]
 pub mod proof;
 
 // Re-exports
 pub use vector_clock::VectorClock;
-pub use scheduler::{DporScheduler, StepRecord, Operation, DporStats};
+pub use scheduler::{DporScheduler, StepRecord, Operation, DporStats, TinyBitSet};
+
+// Ki-DPOR exports
+pub use ki_state::{KiState, ThreadStatus};
+pub use ki_scheduler::KiDporScheduler;
 
 /// Maximum threads supported by DPOR
 pub const MAX_THREADS: usize = 8;
