@@ -42,7 +42,7 @@ petgraph = "0.8.3"
 
 [dev-dependencies]
 # Testing
-criterion = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.5"
 
 [features]
@@ -70,4 +70,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 [[test]]
 name = "dpor_abba_test"
 path = "tests/dpor_abba_test.rs"
+required-features = ["twin"]
+
+[[bench]]
+name = "dpor_bench"
+harness = false
 required-features = ["twin"]
