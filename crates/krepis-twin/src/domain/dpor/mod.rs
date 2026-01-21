@@ -63,7 +63,7 @@ pub use scheduler::{DporScheduler, StepRecord, Operation, DporStats, TinyBitSet}
 
 // Ki-DPOR exports
 pub use ki_state::{KiState, ThreadStatus};
-pub use ki_scheduler::KiDporScheduler;
+pub use ki_scheduler::{KiDporScheduler, LivenessViolation, MAX_STARVATION_LIMIT};
 
 /// Maximum threads supported by DPOR
 pub const MAX_THREADS: usize = 8;

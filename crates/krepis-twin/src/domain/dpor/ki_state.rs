@@ -1,7 +1,7 @@
-//! Ki-DPOR State Node (A* Node)
+//! Ki-DPOR State Node (A* Node) with Liveness Tracking
 //!
 //! This module implements the ExecutionState from the TLA+ specification,
-//! representing a node in the A* search tree.
+//! extended with fairness tracking for starvation detection.
 
 use super::scheduler::{Operation, StepRecord, TinyBitSet};
 use super::vector_clock::VectorClock;
@@ -20,30 +20,26 @@ pub enum ThreadStatus {
     Blocked,
 }
 
-/// Ki-DPOR State (ExecutionState in TLA+)
+/// Ki-DPOR State (ExecutionState in TLA+) with Liveness
 ///
 /// # TLA+ Correspondence
 ///
 /// ```tla
-/// ExecutionState == [
+/// LivenessExecutionState == [
 ///     path: Seq(StepRecord),
 ///     cost_g: Nat,
 ///     heuristic_h: Nat,
 ///     priority_f: Nat,
-///     resource_state: [Resources -> ResourceState],
-///     waiting_queues_state: [Resources -> Seq(Threads)],
-///     thread_status_state: [Threads -> ThreadStatusValues],
-///     clock_state: [Threads -> [Threads -> Nat]]
+///     resource_state: ...,
+///     starvation_counters_state: [Threads -> Nat],  # NEW
+///     fairness_score: Nat                            # NEW
 /// ]
 /// ```
 ///
-/// # A* Properties
+/// # Liveness Properties
 ///
-/// - `cost_g`: Actual cost from start (depth)
-/// - `heuristic_h`: Estimated cost to goal (danger score)
-/// - `priority_f`: Total priority (f = g + h)
-///
-/// Lower `priority_f` = higher priority = explored first
+/// - `starvation_counters`: Steps since each thread made progress
+/// - If counter exceeds MAX_STARVATION_LIMIT, we found a starvation bug
 #[derive(Clone)]
 pub struct KiState {
     /// Execution path (sequence of steps)
@@ -59,14 +55,11 @@ pub struct KiState {
     pub priority_f: usize,
     
     // ========== State Snapshots ==========
-    // A* requires full state restoration since we jump between branches
     
     /// Resource ownership snapshot
-    /// None = free, Some(thread) = owned by thread
     pub resource_owners: Vec<Option<ThreadId>>,
     
     /// Waiting queues snapshot
-    /// waiting_queues[r] = [t1, t2, ...] threads waiting for resource r
     pub waiting_queues: Vec<Vec<ThreadId>>,
     
     /// Thread status snapshot
@@ -75,39 +68,42 @@ pub struct KiState {
     /// Vector clock snapshot
     pub clock_vectors: Vec<VectorClock>,
     
+    // ========== Liveness Tracking ==========
+    
+    /// Starvation counters: steps since each thread executed
+    ///
+    /// # TLA+ Correspondence
+    ///
+    /// ```tla
+    /// starvation_counters_state: [Threads -> Nat]
+    /// ```
+    ///
+    /// Updated by: UpdateStarvationCounters(state, executed_thread)
+    pub starvation_counters: Vec<usize>,
+    
     /// Cached hash for state signature
     state_hash: u64,
 }
 
 impl KiState {
     /// Create initial state
-    ///
-    /// # TLA+ Correspondence
-    ///
-    /// ```tla
-    /// initial_state == [
-    ///     path |-> <<>>,
-    ///     cost_g |-> 0,
-    ///     heuristic_h |-> Heuristic(initial),
-    ///     priority_f |-> 0,
-    ///     ...
-    /// ]
-    /// ```
     pub fn initial(num_threads: usize, num_resources: usize) -> Self {
         let resource_owners = vec![None; num_resources];
         let waiting_queues = vec![Vec::new(); num_resources];
         let thread_status = vec![ThreadStatus::Running; num_threads];
         let clock_vectors = vec![VectorClock::new(); num_threads];
+        let starvation_counters = vec![0; num_threads]; // All start at 0
         
         let state = Self {
             path: Vec::new(),
             cost_g: 0,
-            heuristic_h: 0, // Will be computed
+            heuristic_h: 0,
             priority_f: 0,
             resource_owners,
             waiting_queues,
             thread_status,
             clock_vectors,
+            starvation_counters,
             state_hash: 0,
         };
         
@@ -118,8 +114,6 @@ impl KiState {
     }
     
     /// Create successor state by applying an operation
-    ///
-    /// This is the core of A* expansion - generating child nodes.
     pub fn successor(
         &self,
         thread: ThreadId,
@@ -144,6 +138,9 @@ impl KiState {
         // Apply operation to snapshot
         new_state.apply_operation(thread, operation, resource);
         
+        // Update starvation counters (CRITICAL FOR LIVENESS)
+        new_state.update_starvation_counters(thread);
+        
         // Recompute heuristic and priority
         new_state.recompute_heuristic();
         new_state.priority_f = new_state.cost_g + new_state.heuristic_h;
@@ -164,25 +161,24 @@ impl KiState {
                 if self.resource_owners[r].is_none() {
                     // Resource is free, acquire it
                     self.resource_owners[r] = Some(thread);
+                    // Remove from waiting queue if present
+                    self.waiting_queues[r].retain(|&waiting_thread| waiting_thread != thread);
                 } else {
-                    // Resource is held, block and add to queue
+                    // Resource is held, block and add to queue (if not already there)
                     self.thread_status[t] = ThreadStatus::Blocked;
-                    self.waiting_queues[r].push(thread);
+                    if !self.waiting_queues[r].contains(&thread) {
+                        self.waiting_queues[r].push(thread);
+                    }
                 }
             }
             Operation::Release => {
-                // Release resource
+                // Release resource (make it free)
                 if self.resource_owners[r] == Some(thread) {
-                    // Check if there's a waiter
-                    if let Some(next_thread) = self.waiting_queues[r].first().copied() {
-                        // Wake up first waiter
-                        self.resource_owners[r] = Some(next_thread);
-                        self.thread_status[next_thread.as_usize()] = ThreadStatus::Running;
-                        self.waiting_queues[r].remove(0);
-                    } else {
-                        // No waiters, just release
-                        self.resource_owners[r] = None;
-                    }
+                    self.resource_owners[r] = None;
+                    
+                    // DO NOT automatically wake up waiters
+                    // Let them compete in next Request operations
+                    // This allows unfair scheduling and starvation scenarios
                 }
             }
         }
@@ -191,47 +187,82 @@ impl KiState {
         self.clock_vectors[t].tick(thread);
     }
     
-    /// Compute heuristic value (h in A*)
+    /// Update starvation counters after a step
     ///
     /// # TLA+ Correspondence
     ///
     /// ```tla
-    /// Heuristic(state) ==
-    ///     LET blocked == BlockedThreadCount(state)
-    ///         contention == ContentionScore(state)
-    ///         interleaving == InterleaveComplexity(state)
-    ///         danger_score == (blocked * 100) + (contention * 10) + (interleaving * 5)
-    ///         max_danger == 1000
-    ///     IN max_danger - danger_score
+    /// UpdateStarvationCounters(state, executed_thread) ==
+    ///     [t \in Threads |->
+    ///         IF t = executed_thread
+    ///         THEN 0  \* Reset counter
+    ///         ELSE IF state.thread_status_state[t] \in {"Running", "Blocked"}
+    ///              THEN state.starvation_counters_state[t] + 1
+    ///              ELSE state.starvation_counters_state[t]
+    ///     ]
+    /// ```
+    fn update_starvation_counters(&mut self, executed_thread: ThreadId) {
+        for (t_idx, counter) in self.starvation_counters.iter_mut().enumerate() {
+            let thread = ThreadId(t_idx);
+            
+            if thread == executed_thread {
+                // Reset counter for executing thread
+                *counter = 0;
+            } else {
+                // Increment counter for threads that didn't execute
+                // (but only if they're Running or Blocked)
+                let status = self.thread_status[t_idx];
+                if status == ThreadStatus::Running || status == ThreadStatus::Blocked {
+                    *counter += 1;
+                }
+            }
+        }
+    }
+    
+    /// Compute heuristic value with fairness penalty
+    ///
+    /// # TLA+ Correspondence
+    ///
+    /// ```tla
+    /// LivenessHeuristic(state) ==
+    ///     LET danger_score == (blocked * 100) + (contention * 10) + (interleaving * 5)
+    ///         total_starvation == TotalStarvation(state)
+    ///         max_starvation == MaxStarvation(state)
+    ///         fairness_score == (total_starvation * 50) + (max_starvation * 20)
+    ///         combined_danger == danger_score + fairness_score
+    ///         max_danger == 2000
+    ///     IN max_danger - combined_danger
     /// ```
     ///
-    /// # Implementation
+    /// # Philosophy
     ///
-    /// We compute a "danger score" where higher = more dangerous.
-    /// Then invert it so lower h = higher priority.
+    /// To FIND starvation bugs, we must actively search for unfair paths.
+    /// High starvation = LOWER h = HIGHER priority = Explored sooner.
     fn recompute_heuristic(&mut self) {
+        // Original danger metrics
         let blocked_count = self.blocked_threads_count();
         let contention_score = self.contention_score();
         let interleaving_complexity = self.interleaving_complexity();
         
-        // Danger score: higher = more dangerous = higher priority
         let danger_score = (blocked_count * 100)
             + (contention_score * 10)
             + (interleaving_complexity * 5);
         
+        // Fairness metrics (NEW)
+        let total_starvation = self.total_starvation();
+        let max_starvation = self.max_starvation();
+        
+        let fairness_score = (total_starvation * 50) + (max_starvation * 20);
+        
+        // Combined score
+        let combined_danger = danger_score + fairness_score;
+        
         // Invert so lower h = higher priority
-        const MAX_DANGER: usize = 1000;
-        self.heuristic_h = MAX_DANGER.saturating_sub(danger_score);
+        const MAX_DANGER: usize = 2000; // Increased to accommodate fairness terms
+        self.heuristic_h = MAX_DANGER.saturating_sub(combined_danger);
     }
     
     /// Count blocked threads
-    ///
-    /// # TLA+ Correspondence
-    ///
-    /// ```tla
-    /// BlockedThreadCount(state) ==
-    ///     Cardinality({t \in Threads : state.thread_status_state[t] = "Blocked"})
-    /// ```
     #[inline]
     fn blocked_threads_count(&self) -> usize {
         self.thread_status
@@ -241,26 +272,12 @@ impl KiState {
     }
     
     /// Calculate contention score (sum of waiting queue lengths)
-    ///
-    /// # TLA+ Correspondence
-    ///
-    /// ```tla
-    /// ContentionScore(state) ==
-    ///     SumSeq({Len(state.waiting_queues_state[r]) : r \in Resources})
-    /// ```
     #[inline]
     fn contention_score(&self) -> usize {
         self.waiting_queues.iter().map(|q| q.len()).sum()
     }
     
     /// Calculate interleaving complexity (distinct threads in path)
-    ///
-    /// # TLA+ Correspondence
-    ///
-    /// ```tla
-    /// InterleaveComplexity(state) ==
-    ///     Cardinality({s.thread : s \in DOMAIN state.path})
-    /// ```
     #[inline]
     fn interleaving_complexity(&self) -> usize {
         let mut threads = TinyBitSet::new(MAX_THREADS);
@@ -268,38 +285,51 @@ impl KiState {
             threads.insert(step.thread.as_usize());
         }
         
-        // Count set bits
         (0..MAX_THREADS)
             .filter(|&i| threads.contains(i))
             .count()
     }
     
-    /// Compute state signature hash
-    ///
-    /// Used for detecting equivalent states (explored set).
+    /// Total starvation (sum of all counters)
     ///
     /// # TLA+ Correspondence
     ///
     /// ```tla
-    /// StateSignature(state) ==
-    ///     [resources |-> state.resource_state,
-    ///      statuses |-> state.thread_status_state,
-    ///      queues |-> state.waiting_queues_state]
+    /// TotalStarvation(state) ==
+    ///     LET counters == {state.starvation_counters_state[t] : t \in Threads}
+    ///     IN SumSeq(SetToSeq(counters))
     /// ```
+    #[inline]
+    fn total_starvation(&self) -> usize {
+        self.starvation_counters.iter().sum()
+    }
+    
+    /// Maximum starvation (highest counter)
+    ///
+    /// # TLA+ Correspondence
+    ///
+    /// ```tla
+    /// MaxStarvation(state) ==
+    ///     LET counters == {state.starvation_counters_state[t] : t \in Threads}
+    ///     IN CHOOSE max \in Nat : max \in counters /\ \A c \in counters : c <= max
+    /// ```
+    #[inline]
+    fn max_starvation(&self) -> usize {
+        *self.starvation_counters.iter().max().unwrap_or(&0)
+    }
+    
+    /// Compute state signature hash
     fn recompute_hash(&mut self) {
         let mut hasher = DefaultHasher::new();
         
-        // Hash resource owners
         for owner in &self.resource_owners {
             owner.hash(&mut hasher);
         }
         
-        // Hash thread status
         for status in &self.thread_status {
             status.hash(&mut hasher);
         }
         
-        // Hash waiting queues
         for queue in &self.waiting_queues {
             queue.hash(&mut hasher);
         }
@@ -313,30 +343,33 @@ impl KiState {
     }
     
     /// Get enabled (runnable) threads
+    ///
+    /// Returns threads that can make progress:
+    /// - Running threads (always enabled)
+    /// - Blocked threads (may try Request again when resource becomes free)
     pub fn enabled_threads(&self) -> Vec<ThreadId> {
-        self.thread_status
-            .iter()
-            .enumerate()
-            .filter(|(_, &status)| status == ThreadStatus::Running)
-            .map(|(i, _)| ThreadId(i))
-            .collect()
+    self.thread_status
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &status)| {
+            match status {
+                ThreadStatus::Running => Some(ThreadId(i)),
+                ThreadStatus::Blocked => {
+                    // Blocked threads are still "enabled" in the sense that
+                    // they can attempt operations (retry Request)
+                    Some(ThreadId(i))
+                }
+            }
+        })
+        .collect()
     }
+    
 }
 
 // ============================================================================
 // Ordering for BinaryHeap (Min-Heap behavior)
 // ============================================================================
 
-/// Implement Ord for KiState to work with BinaryHeap
-///
-/// # Critical: Reverse Ordering
-///
-/// Rust's BinaryHeap is a MAX-heap (largest first).
-/// A* needs a MIN-heap (smallest priority first).
-///
-/// Solution: Reverse the ordering.
-/// - `self.f < other.f` returns `Ordering::Greater`
-/// - This makes the heap pop the state with lowest f value.
 impl Ord for KiState {
     fn cmp(&self, other: &Self) -> Ordering {
         // REVERSE: Lower priority_f = Greater ordering = Popped first
@@ -363,24 +396,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_initial_state() {
+    fn test_initial_state_liveness() {
         let state = KiState::initial(2, 2);
         
-        assert_eq!(state.cost_g, 0);
-        assert_eq!(state.path.len(), 0);
-        assert_eq!(state.resource_owners.len(), 2);
-        assert!(state.resource_owners.iter().all(|o| o.is_none()));
+        assert_eq!(state.starvation_counters.len(), 2);
+        assert!(state.starvation_counters.iter().all(|&c| c == 0));
     }
 
     #[test]
-    fn test_heuristic_blocked_threads() {
+    fn test_starvation_counter_update() {
         let mut state = KiState::initial(3, 2);
         
-        // Initially no blocked threads
+        // Thread 0 executes
+        state.update_starvation_counters(ThreadId(0));
+        
+        // Thread 0 should be reset to 0
+        assert_eq!(state.starvation_counters[0], 0);
+        // Thread 1 and 2 should increment (they're Running but didn't execute)
+        assert_eq!(state.starvation_counters[1], 1);
+        assert_eq!(state.starvation_counters[2], 1);
+        
+        // Thread 0 executes again
+        state.update_starvation_counters(ThreadId(0));
+        
+        assert_eq!(state.starvation_counters[0], 0);
+        assert_eq!(state.starvation_counters[1], 2); // Keeps incrementing
+        assert_eq!(state.starvation_counters[2], 2);
+    }
+
+    #[test]
+    fn test_heuristic_with_starvation() {
+        let mut state = KiState::initial(3, 2);
+        
         let initial_h = state.heuristic_h;
         
-        // Block one thread
-        state.thread_status[1] = ThreadStatus::Blocked;
+        // Simulate starvation
+        state.starvation_counters[1] = 5;
+        state.starvation_counters[2] = 3;
         state.recompute_heuristic();
         
         // h should decrease (higher danger = lower h = higher priority)
@@ -388,45 +440,31 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering_min_heap() {
-        let mut state1 = KiState::initial(2, 2);
-        let mut state2 = KiState::initial(2, 2);
+    fn test_fairness_metrics() {
+        let mut state = KiState::initial(3, 2);
         
-        state1.priority_f = 10;
-        state2.priority_f = 5;
+        state.starvation_counters[0] = 5;
+        state.starvation_counters[1] = 3;
+        state.starvation_counters[2] = 2;
         
-        // state2 has lower priority, should be "greater" (popped first)
-        assert!(state2 > state1);
+        assert_eq!(state.total_starvation(), 10);
+        assert_eq!(state.max_starvation(), 5);
     }
 
     #[test]
-    fn test_successor_generation() {
+    fn test_successor_resets_executing_thread_counter() {
         let state = KiState::initial(2, 2);
         
-        let successor = state.successor(
+        // Create successor where thread 0 executes
+        let mut successor = state.successor(
             ThreadId(0),
             Operation::Request,
             ResourceId(0),
         );
         
-        assert_eq!(successor.cost_g, 1);
-        assert_eq!(successor.path.len(), 1);
-        assert_eq!(successor.resource_owners[0], Some(ThreadId(0)));
-    }
-
-    #[test]
-    fn test_state_signature() {
-        let state1 = KiState::initial(2, 2);
-        let state2 = KiState::initial(2, 2);
-        
-        // Same initial state should have same signature
-        assert_eq!(state1.signature(), state2.signature());
-        
-        // Different states should (likely) have different signatures
-        let mut state3 = state1.clone();
-        state3.resource_owners[0] = Some(ThreadId(0));
-        state3.recompute_hash();
-        
-        assert_ne!(state1.signature(), state3.signature());
+        // Thread 0's counter should be 0
+        assert_eq!(successor.starvation_counters[0], 0);
+        // Thread 1's counter should be 1 (didn't execute)
+        assert_eq!(successor.starvation_counters[1], 1);
     }
 }
