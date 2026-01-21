@@ -214,6 +214,7 @@ pub struct VerificationBackend {
 
 impl VerificationBackend {
     // [Production] 실제 실행 시: 1024개 (넉넉하게)
+    /// Maximum number of events to track
     #[cfg(not(kani))]
     pub const MAX_EVENTS: usize = 1024;
 

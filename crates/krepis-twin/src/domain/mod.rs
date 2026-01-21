@@ -193,6 +193,12 @@ pub mod resources;
 // Re-exports
 pub use resources::{ResourceTracker, DefaultTracker, ThreadId as ResourceThreadId, ResourceId};
 
+#[cfg(feature = "twin")]
+pub mod dpor;
+
+#[cfg(feature = "twin")]
+pub use dpor::{DporScheduler, VectorClock, Operation};
+
 /// Production simulator with maximum performance
 ///
 /// # Configuration

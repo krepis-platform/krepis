@@ -44,7 +44,7 @@ pub mod proof;
 
 // Re-exports
 pub use types::*;
-pub use tracker::ResourceTracker;
+pub use tracker::{ResourceTracker, RequestResult};
 
 #[cfg(not(feature = "twin"))]
 pub use noop::NoOpTracker as DefaultTracker;
