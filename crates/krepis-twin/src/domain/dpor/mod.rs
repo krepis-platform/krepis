@@ -57,6 +57,9 @@ pub mod ki_scheduler;
 #[cfg(kani)]
 pub mod proof;
 
+#[cfg(kani)]
+pub mod ki_proof;
+
 // Re-exports
 pub use vector_clock::VectorClock;
 pub use scheduler::{DporScheduler, StepRecord, Operation, DporStats, TinyBitSet};

@@ -55,11 +55,14 @@ pub struct KiState {
     pub priority_f: usize,
     
     // ========== State Snapshots ==========
+    // A* requires full state restoration since we jump between branches
     
     /// Resource ownership snapshot
+    /// None = free, Some(thread) = owned by thread
     pub resource_owners: Vec<Option<ThreadId>>,
     
     /// Waiting queues snapshot
+    /// waiting_queues[r] = [t1, t2, ...] threads waiting for resource r
     pub waiting_queues: Vec<Vec<ThreadId>>,
     
     /// Thread status snapshot
@@ -87,6 +90,18 @@ pub struct KiState {
 
 impl KiState {
     /// Create initial state
+    ///
+    /// # TLA+ Correspondence
+    ///
+    /// ```tla
+    /// initial_state == [
+    ///     path |-> <<>>,
+    ///     cost_g |-> 0,
+    ///     heuristic_h |-> Heuristic(initial),
+    ///     priority_f |-> 0,
+    ///     ...
+    /// ]
+    /// ```
     pub fn initial(num_threads: usize, num_resources: usize) -> Self {
         let resource_owners = vec![None; num_resources];
         let waiting_queues = vec![Vec::new(); num_resources];
@@ -113,7 +128,17 @@ impl KiState {
         state
     }
     
-    /// Create successor state by applying an operation
+    /// Generate successor state
+    ///
+    /// # TLA+ Correspondence
+    ///
+    /// ```tla
+    /// successor(curr, thread, op, res) == [
+    ///     path |-> Append(curr.path, [thread |-> thread, op |-> op, res |-> res]),
+    ///     cost_g |-> curr.cost_g + 1,
+    ///     ...
+    /// ]
+    /// ```
     pub fn successor(
         &self,
         thread: ThreadId,
