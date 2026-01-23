@@ -152,6 +152,7 @@ impl Default for EventDispatcher {
     }
 }
 
+
 /// Simulator - Top-level simulation controller
 ///
 /// # Type Parameters

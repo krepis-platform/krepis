@@ -17,6 +17,7 @@
 use super::backend::{ConfigurableBackend, MemoryBackend};
 use super::ops::StoreBuffer;
 use super::types::{Address, CoreId, StoreEntry, Value};
+#[cfg(not(kani))]
 use dashmap::DashMap;
 use parking_lot::RwLock;
 

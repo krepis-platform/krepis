@@ -230,7 +230,7 @@ impl SchedulerBackend for ProductionBackend {
         // DashMap returns Option<Ref<K, V>>, we extract the value
         self.thread_states
             .get(&thread_id)
-            .map(|entry| *entry.value())
+            .map(|entry: dashmap::mapref::one::Ref<'_, ThreadId, ThreadState>| *entry.value())
             .ok_or(SchedulerError::InvalidThreadId {
                 thread_id,
                 max_threads: self.max_threads,
@@ -311,8 +311,10 @@ impl SchedulerBackend for ProductionBackend {
         }
 
         self.thread_states
-            .get(&thread_id)
-            .map(|entry| entry.value().is_runnable())
+            .iter()
+            .filter(|entry: &dashmap::mapref::multiple::RefMulti<'_, ThreadId, ThreadState>| entry.key() == &thread_id)
+            .map(|entry: dashmap::mapref::multiple::RefMulti<'_, ThreadId, ThreadState>| entry.value().is_runnable())
+            .next()
             .unwrap_or(false)
     }
 
@@ -349,6 +351,7 @@ impl SchedulerBackend for ProductionBackend {
         // DashMap::iter() returns an iterator over all entries
         // This is a read-only iteration that acquires read locks on shards
         for entry in self.thread_states.iter() {
+            let entry: dashmap::mapref::multiple::RefMulti<'_, ThreadId, ThreadState> = entry;
             match *entry.value() {
                 ThreadState::Runnable => runnable += 1,
                 ThreadState::Blocked => blocked += 1,

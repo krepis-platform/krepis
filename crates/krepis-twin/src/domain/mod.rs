@@ -80,10 +80,10 @@
 //!
 //! ```rust
 //! use krepis_twin::domain::*;
-//! use krepis_twin::domain::tracing::{ProductionTracer, ThreadId};
+//! use krepis_twin::domain::tracing::{ProductionTracer};
 //!
 //! let mut tracer = ProductionTracer::with_capacity(10_000);
-//! let thread_id = ThreadId::new(0);
+//! let thread_id = TracingThreadId::new(0);
 //! let meta = tracer.new_metadata(thread_id).unwrap();
 //! // Record events during simulation...
 //! // Then analyze causality
@@ -99,48 +99,51 @@ pub mod memory;
 pub mod scheduler;
 pub mod simulation;
 pub mod tracing;
+pub mod resources;
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Public Re-exports - Flattened API for Convenience
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ============================================================================
+// Public Re-exports - Ergonomic API Surface
+// ============================================================================
 
-// Re-export all public types from submodules so users can write:
-//   use krepis_twin::domain::VirtualClock;
-// instead of:
-//   use krepis_twin::domain::clock::VirtualClock;
+// Core Simulation Types
+pub use simulation::{EventDispatcher, Simulator};
 
-// Clock types
-pub use clock::{
-    ClockBackend,
-    EventId,
-    EventPayload,
-    LamportClock,
-    ProductionBackend as ProductionClockBackend,
-    ScheduledEvent,
-    TimeMode,
-    VerificationBackend as VerificationClockBackend,
-    VirtualClock,
-    VirtualTimeNs,
-};
-
-// Memory types
+// Memory System
 pub use memory::{
     Address,
     ConfigurableBackend,
     ConsistencyModel,
     CoreId,
-    MemoryBackend,
     MemoryConfig,
     MemoryOp,
-    ProductionBackend as ProductionMemoryBackend,
     SimulatedMemory,
     StoreBuffer,
     StoreEntry,
     Value,
+
+    // Backends
+    MemoryBackend,
+    ProductionBackend as ProductionMemoryBackend,
     VerificationBackend as VerificationMemoryBackend,
 };
 
-// Scheduler types
+// Clock System
+pub use clock::{
+    EventId,
+    EventPayload,
+    LamportClock,
+    ScheduledEvent,
+    TimeMode,
+    VirtualClock,
+    VirtualTimeNs,
+
+    // Backends
+    ClockBackend,
+    VerificationBackend as VerificationClockBackend,
+    ProductionBackend as ProductionClockBackend,
+};
+
+// Scheduler System
 pub use scheduler::{
     SchedulerBackend,
     SchedulerBackendExt,
@@ -148,7 +151,7 @@ pub use scheduler::{
     SchedulerOracle,
     SchedulingStrategy,
     TaskId,
-    ThreadId,
+    ThreadId as SchedulerThreadId,
     ThreadState,
     VerificationScheduler,
     VerificationSchedulerBackend,
@@ -157,11 +160,70 @@ pub use scheduler::{
 #[cfg(not(kani))]
 pub use scheduler::{ProductionScheduler, ProductionSchedulerBackend};
 
-// Simulation types
-pub use simulation::{EventDispatcher, Simulator};
+// Resource Tracking System
+pub use resources::{
+    DefaultTracker,
+    RequestResult,
+    ResourceError,
+    ResourceId,
+    ResourceTracker,
+    ThreadId as ResourceThreadId,
+};
 
+// ============================================================================
+// DPOR Module - Feature-Gated for Verification
+// ============================================================================
 
-// Re-export tracing types (updated for zero-cost design)
+#[cfg(feature = "twin")]
+pub mod dpor;
+
+/// DPOR types - only available with `--features twin`
+///
+/// These types are used for formal verification and bug hunting during
+/// development. Production builds do not include DPOR overhead.
+///
+/// # Example
+/// ```rust
+/// #[cfg(feature = "twin")]
+/// use krepis_twin::domain::{DporScheduler, KiDporScheduler, Operation};
+/// 
+/// #[cfg(feature = "twin")]
+/// let scheduler = KiDporScheduler::new(4, 2);
+/// ```
+#[cfg(feature = "twin")]
+pub use dpor::{
+    // Schedulers
+    DporScheduler,          // Classic DPOR (Exhaustive DFS)
+    KiDporScheduler,        // Ki-DPOR (A* Heuristic)
+    
+    // Core Types
+    Operation,              // Request/Release operations
+    StepRecord,            // Execution trace record
+    VectorClock,           // Causality tracking
+    
+    // Liveness Detection (Phase 1D)
+    LivenessViolation,     // Starvation/Deadlock enum
+    ThreadStatus,          // Running/Blocked status
+    
+    // State Representation
+    KiState,               // A* state node
+    
+    // Statistics
+    DporStats,             // Exploration metrics
+    
+    // Utilities
+    TinyBitSet,            // Compact bitset for small sets
+    
+    // Constants
+    MAX_THREADS,           // Maximum threads supported (8)
+    MAX_DEPTH,             // Maximum exploration depth (20)
+    MAX_STARVATION_LIMIT,  // Starvation detection threshold (10)
+};
+
+// ============================================================================
+// Tracing System - Zero-Cost Observability
+// ============================================================================
+
 pub use tracing::{
     // Core types
     EventTracer,
@@ -169,14 +231,14 @@ pub use tracing::{
     TracingError,
     SimulationEvent,
     EventMetadata,
-    MemoryOperation,
+    MemoryOperation as TracingMemoryOp,
     ClockEvent,
     FenceType,
     SyncType,
     CausalityGraph,
     HappensBeforeRelation,
     
-    // Zero-cost backend types
+    // Backend types
     TracerBackend,
     ProductionBackend as ProductionTracerBackend,
     VerificationBackend as VerificationTracerBackend,
@@ -186,18 +248,8 @@ pub use tracing::{
     VerificationTracer,
     
     // Re-export from event module
-    event::{ThreadId as TracingThreadId, MemAddr, LamportTimestamp, MAX_THREADS},
+    event::{ThreadId as TracingThreadId, MemAddr, LamportTimestamp as TracingLamportTimestamp, MAX_THREADS as TRACING_MAX_THREADS},
 };
-
-pub mod resources; 
-// Re-exports
-pub use resources::{ResourceTracker, DefaultTracker, ThreadId as ResourceThreadId, ResourceId};
-
-#[cfg(feature = "twin")]
-pub mod dpor;
-
-#[cfg(feature = "twin")]
-pub use dpor::{DporScheduler, VectorClock, Operation};
 
 /// Production simulator with maximum performance
 ///
@@ -521,7 +573,7 @@ pub trait TracingAdapter {
     fn trace_memory_read(
         &self,
         tracer: &mut ProductionTracer,
-        thread_id: ThreadId,
+        thread_id: SchedulerThreadId,
         addr: Address,
         value: Value,
         cache_hit: bool,
@@ -531,7 +583,7 @@ pub trait TracingAdapter {
     fn trace_memory_write(
         &self,
         tracer: &mut ProductionTracer,
-        thread_id: ThreadId,
+        thread_id: SchedulerThreadId,
         addr: Address,
         value: Value,
         buffered: bool,
@@ -541,7 +593,7 @@ pub trait TracingAdapter {
     fn trace_buffer_flush(
         &self,
         tracer: &mut ProductionTracer,
-        thread_id: ThreadId,
+        thread_id: SchedulerThreadId,
         addr: Address,
         value: Value,
     );
@@ -550,9 +602,9 @@ pub trait TracingAdapter {
     fn trace_clock_tick(
         &self,
         tracer: &mut ProductionTracer,
-        thread_id: ThreadId,
-        prev_timestamp: LamportTimestamp,
-        new_timestamp: LamportTimestamp,
+        thread_id: SchedulerThreadId,
+        prev_timestamp: TracingLamportTimestamp,
+        new_timestamp: TracingLamportTimestamp,
     );
 }
 
@@ -608,7 +660,7 @@ mod tests {
 
         // Verify tracer configuration
         assert_eq!(_tracer.event_count(), 0); // No events recorded yet
-        assert_eq!(_tracer.global_timestamp(), LamportTimestamp::ZERO);
+        assert_eq!(_tracer.global_timestamp(), TracingLamportTimestamp::ZERO);
     }
 
     #[test]
@@ -622,7 +674,7 @@ mod tests {
         let event = SimulationEvent::ClockTick {
             meta,
             event: ClockEvent {
-                prev_timestamp: LamportTimestamp::ZERO,
+                prev_timestamp: TracingLamportTimestamp::ZERO,
                 new_timestamp: meta.timestamp,
             },
         };
@@ -645,7 +697,7 @@ mod tests {
         let event = SimulationEvent::ClockTick {
             meta,
             event: ClockEvent {
-                prev_timestamp: LamportTimestamp::ZERO,
+                prev_timestamp: TracingLamportTimestamp::ZERO,
                 new_timestamp: meta.timestamp,
             },
         };
@@ -699,7 +751,7 @@ mod tests {
             let event = SimulationEvent::ClockTick {
                 meta,
                 event: ClockEvent {
-                    prev_timestamp: LamportTimestamp(0),
+                    prev_timestamp: TracingLamportTimestamp(0),
                     new_timestamp: meta.timestamp,
                 },
             };
@@ -729,7 +781,7 @@ mod tests {
         #[cfg(not(debug_assertions))]
         {
             // This would be UB in release, so we test the validation in new_metadata
-            let invalid_id = ThreadId(MAX_THREADS as u32);
+            let invalid_id = ThreadId(TRACING_MAX_THREADS as u32);
             assert!(matches!(
                 tracer.new_metadata(invalid_id),
                 Err(TracingError::InvalidThreadId(_))
@@ -751,7 +803,7 @@ mod tests {
             let event = SimulationEvent::ClockTick {
                 meta,
                 event: ClockEvent {
-                    prev_timestamp: LamportTimestamp(i),
+                    prev_timestamp: TracingLamportTimestamp(i),
                     new_timestamp: meta.timestamp,
                 },
             };
@@ -773,7 +825,7 @@ mod tests {
             let event = SimulationEvent::ClockTick {
                 meta,
                 event: ClockEvent {
-                    prev_timestamp: LamportTimestamp(i),
+                    prev_timestamp: TracingLamportTimestamp(i),
                     new_timestamp: meta.timestamp,
                 },
             };

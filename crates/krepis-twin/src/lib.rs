@@ -6,189 +6,215 @@
 //! the Krepis runtime environment with microsecond precision and formal
 //! verification guarantees.
 //!
-//! # Trinity Architecture
-//! 
-//! This crate follows the Trinity Architecture pattern:
-//! 
-//! - **Domain**: Pure business logic and domain models
-//! - **Infrastructure**: External technology integrations
-//! - **Adapters**: Ports & Adapters connecting domain to infrastructure
-//!
-//! # TLA+ Verification
-//! 
-//! All core components are verified against TLA+ specifications:
-//! 
-//! - `VirtualClock`: Corresponds to `specs/tla/VirtualClock.tla`
-//! - `SimulatedMemory`: Corresponds to `specs/tla/SimulatedMemory.tla`
-//! - `SchedulerOracle`: Corresponds to `specs/tla/SchedulerOracle.tla`
-//! - `SovereignKernel`: Corresponds to `specs/tla/SovereignKernel.tla`
-//!
-//! # Physical Laws (Invariants)
-//! 
-//! The simulator enforces these fundamental invariants:
-//! 
-//! ## Temporal Laws
-//! - **T-001**: Time Monotonicity - Time never decreases
-//! - **T-002**: Event Causality - Lamport ordering preserved
-//! - **T-003**: Event Ordering - Events fire in scheduled order
-//!
-//! ## Memory Laws
-//! - **M-001**: Sequential Consistency - SeqCst operations totally ordered
-//! - **M-002**: Atomic Integrity - No torn reads/writes
-//! - **M-003**: Store Buffer Semantics - Relaxed memory model
-//!
-//! ## Scheduler Laws
-//! - **S-001**: Progress - Runnable tasks eventually run
-//! - **S-002**: Deadlock Detection - Cycles detected and reported
-//! - **S-003**: Fairness - No task starvation
-//!
-//! ## Kernel Laws
-//! - **K-001**: Heap Isolation - Tenant heap limits enforced
-//! - **K-002**: Watchdog Guarantee - Runaway code terminated
-//! - **K-003**: Tenant Isolation - No cross-tenant access
-//!
-//! # Usage
+//! # Quick Start
 //! 
 //! ```rust
-//! // 필요한 타입들을 명시적으로 가져옵니다.
-//! use krepis_twin::domain::{ProductionSimulatorBuilder, TimeMode, MemoryConfig};
+//! use krepis_twin::ProductionSimulatorBuilder;
 //! 
-//! // 1. 빌더를 사용하여 시뮬레이터 생성
-//! // ProductionSimulatorBuilder는 내부적으로 필요한 메모리와 클록 백엔드를 조립합니다.
+//! // Use the builder to configure and create the simulator
 //! let mut sim = ProductionSimulatorBuilder::new()
 //!     .num_cores(4)
 //!     .buffer_size(2)
 //!     .build();
 //! 
-//! // 2. 메모리 작업 실행 (Buffered Write)
+//! // Write to memory (buffered)
 //! sim.memory_mut().write(0, 0x1000, 42).unwrap();
 //! 
-//! // 3. 시뮬레이션 엔진 가동 (이벤트 처리 및 메모리 플러시)
+//! // Run simulation until all events are processed
 //! sim.run_until_idle();
 //! 
-//! // 4. 결과 확인
+//! // Verify the write was flushed to main memory
 //! assert_eq!(sim.memory().read_main_memory(0x1000), 42);
 //! ```
+//!
+//! # Phase 2 Integration (KNUL FFI)
+//!
+//! For KNUL integration, use the ergonomic top-level exports:
+//!
+//! ```rust
+//! use krepis_twin::{Simulator, ThreadId, ResourceId};
+//! 
+//! #[cfg(feature = "twin")]
+//! use krepis_twin::{KiDporScheduler, LivenessViolation, Operation};
+//! ```
+//!
+//! # Builder Pattern
+//!
+//! The simulator uses a builder pattern for flexible configuration:
+//!
+//! ```rust
+//! use krepis_twin::ProductionSimulatorBuilder;
+//! 
+//! let mut sim = ProductionSimulatorBuilder::new()
+//!     .num_cores(8)              // Set number of cores
+//!     .buffer_size(4)            // Set buffer size per core
+//!     .enable_tracing(true)      // Enable event tracing
+//!     .max_traced_events(100_000) // Limit traced events
+//!     .build();
+//! ```
+//!
+//! # With Tracing Support
+//!
+//! To enable observability and formal verification:
+//!
+//! ```rust
+//! use krepis_twin::ProductionSimulatorBuilder;
+//! 
+//! let (mut sim, tracer) = ProductionSimulatorBuilder::new()
+//!     .num_cores(4)
+//!     .buffer_size(2)
+//!     .enable_tracing(true)
+//!     .build_with_tracer();
+//! 
+//! // Simulator and tracer are now ready for integrated use
+//! // Tracer can record events for later analysis
+//! ```
+//!
+//! # Architecture
+//! 
+//! The crate is organized into layers:
+//! - **domain**: Core simulation logic (clock, memory, scheduler, resources)
+//! - **Verification**: DPOR schedulers for bug hunting (feature-gated)
+//!
 //! # Feature Flags
 //! 
-//! - `verification`: Enable Kani formal verification proofs
+//! - `twin`: Enable DPOR schedulers for formal verification (adds ~200KB to binary)
+//! - `verification`: Enable Kani formal verification proofs (dev-only)
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 #![warn(clippy::pedantic)]
-#![warn(clippy::nursery)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::must_use_candidate)]
 
-// Trinity Architecture Layers
+// ============================================================================
+// Domain Layer - Always Available
+// ============================================================================
+
 pub mod domain;
-pub mod infrastructure;
-pub mod adapters;
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Re-export Primary Types
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ============================================================================
+// Top-Level Ergonomic Re-exports
+// ============================================================================
 
-// Clock types
-pub use domain::{
-    EventId,
-    EventPayload,
-    LamportClock,
-    ScheduledEvent,
-    TimeMode,
-    VirtualClock,
-    VirtualTimeNs,
+// Simulation Entry Points
+pub use domain::simulation::{
+    EventDispatcher,
+    Simulator,
 };
 
-// Memory types
+// Builder Pattern (CRITICAL: Export the builders, not builder methods)
 pub use domain::{
-    Address,
-    CoreId,
-    ConsistencyModel,
-    MemoryConfig,
-    MemoryOp,
-    SimulatedMemory,
-    StoreEntry,
-    Value,
+    ProductionSimulator, 
+    VerificationSimulator, 
+    ProductionSimulatorBuilder, 
+    VerificationSimulatorBuilder
 };
 
-// Scheduler types (always available for both production and verification)
-pub use domain::{
-    SchedulerBackend,
-    SchedulerError,
-    SchedulerOracle,
-    SchedulingStrategy,
-    TaskId,
+// Resource Identifiers (Critical for KNUL mapping)
+pub use domain::resources::{
     ThreadId,
-    ThreadState,
-    VerificationScheduler,
-    VerificationSchedulerBackend,
+    ResourceId,
+    ResourceError,
+    RequestResult,
 };
 
-// Scheduler types (production only - excluded from Kani builds)
-#[cfg(not(kani))]
-pub use domain::{ProductionScheduler, ProductionSchedulerBackend};
+// Memory System
+pub use domain::memory::{
+    MemoryConfig,
+    ConsistencyModel,
+};
 
-// Simulation types
-pub use domain::EventDispatcher;
-// pub use adapters::Simulator;  // TODO: Step 6
+// Clock System
+pub use domain::clock::{
+    TimeMode,
+    VirtualTimeNs,
+    EventPayload,
+};
 
-/// Library version
+// ============================================================================
+// DPOR Verification - Feature-Gated
+// ============================================================================
+
+/// DPOR types for formal verification (only with `--features twin`)
+///
+/// These types enable bug hunting and state space exploration during
+/// development and CI. Production builds exclude this module entirely.
+///
+/// # Usage
+///
+/// ```rust
+/// #[cfg(feature = "twin")]
+/// use krepis_twin::{DporScheduler, KiDporScheduler, Operation, LivenessViolation};
+/// 
+/// #[cfg(feature = "twin")]
+/// {
+///     // Use Ki-DPOR for fast bug hunting
+///     let scheduler = KiDporScheduler::new(4, 2);
+///     
+///     // Or Classic DPOR for exhaustive verification
+///     let classic = DporScheduler::new(4);
+/// }
+/// ```
+#[cfg(feature = "twin")]
+pub use domain::dpor::{
+    // Schedulers
+    DporScheduler,
+    KiDporScheduler,
+    
+    // Core Types
+    Operation,
+    StepRecord,
+    VectorClock,
+    
+    // Liveness (Phase 1D)
+    LivenessViolation,
+    ThreadStatus,
+    
+    // State Representation
+    KiState,
+    
+    // Statistics & Metrics
+    DporStats,
+    
+    // Constants
+    MAX_THREADS,
+    MAX_DEPTH,
+    MAX_STARVATION_LIMIT,
+};
+
+// ============================================================================
+// Version Information
+// ============================================================================
+
+/// Crate version string
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// TLA+ specification version this implementation corresponds to
-pub const TLA_SPEC_VERSION: &str = "1.0.0";
+/// Phase 1 completion status
+pub const PHASE_1_COMPLETE: bool = true;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Supported verification levels
+pub const VERIFICATION_LEVELS: &[&str] = &[
+    "V-1: Build Pass",
+    "V-2: Unit Tests",
+    "V-3: TLA+ + Kani (Critical Paths)",
+    "V-4: Exhaustive Verification",
+    "V-5: External Audit",
+];
 
-    #[test]
-    fn test_version_defined() {
-        assert!(!VERSION.is_empty());
-    }
+// ============================================================================
+// Feature Flags Documentation
+// ============================================================================
 
-    #[test]
-    fn test_tla_spec_version_defined() {
-        assert_eq!(TLA_SPEC_VERSION, "1.0.0");
-    }
+// Note: We intentionally allow `twin` feature in release builds.
+// High-performance verification (Ki-DPOR) requires compiler optimizations
+// to explore vast state spaces efficiently.
+//
+// Production builds should strictly use:
+// `cargo build --release --no-default-features`
 
-    #[test]
-    fn test_scheduler_types_exported() {
-        // Verify core scheduler types are always available
-        let _tid = ThreadId::new(0);
-        let _task = TaskId::new(0);
-        let _state = ThreadState::Runnable;
-        let _strategy = SchedulingStrategy::Production;
-    }
-
-    #[test]
-    #[cfg(not(kani))]
-    fn test_production_scheduler_exported() {
-        // This test only compiles in non-Kani builds
-        // Verifies that ProductionScheduler is available in production
-        use domain::clock::{ProductionBackend as ProdClockBackend, TimeMode, VirtualClock};
-        
-        let clock_backend = ProdClockBackend::new();
-        let clock = VirtualClock::new(clock_backend, TimeMode::EventDriven);
-        
-        let _scheduler: ProductionScheduler = SchedulerOracle::new(
-            clock,
-            4,
-            SchedulingStrategy::Production,
-        );
-    }
-
-    #[test]
-    fn test_verification_scheduler_always_available() {
-        // This test compiles in both Kani and non-Kani builds
-        use domain::clock::{VerificationBackend as VerifClockBackend, TimeMode, VirtualClock};
-        
-        let clock_backend = VerifClockBackend::new();
-        let clock = VirtualClock::new(clock_backend, TimeMode::EventDriven);
-        
-        let _scheduler: VerificationScheduler = SchedulerOracle::new(
-            clock,
-            4,
-            SchedulingStrategy::Verification,
-        );
-    }
-}
+// #[cfg(all(feature = "twin", not(debug_assertions)))]
+// compile_error!(
+//     "The `twin` feature should not be enabled in release builds. \
+//      Use `cargo build --release --no-default-features` for production."
+// );

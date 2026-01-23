@@ -481,7 +481,7 @@ mod tests {
         let state = KiState::initial(2, 2);
         
         // Create successor where thread 0 executes
-        let mut successor = state.successor(
+        let successor = state.successor(
             ThreadId(0),
             Operation::Request,
             ResourceId(0),
