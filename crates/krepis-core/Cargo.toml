@@ -1,0 +1,50 @@
+[package]
+name = "krepis-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Krepis Team"]
+license = "Apache-2.0"
+description = "Krepis Core: Shared abstraction layer between Kernel and KNUL"
+repository = "https://github.com/krepis-platform/krepis"
+
+[lib]
+name = "krepis_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+
+# Async support (for trait implementations using Future)
+tokio = { version = "1.42", features = ["sync"], optional = true }
+
+[dev-dependencies]
+# Testing
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio = { version = "1.42", features = ["full"] }
+
+[features]
+default = ["std"]
+# Standard library support (always enabled for now)
+std = []
+# Optional async tokio integration
+tokio-runtime = ["dep:tokio"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Documentation settings
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
