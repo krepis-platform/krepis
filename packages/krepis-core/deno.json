@@ -1,0 +1,44 @@
+{
+  "name": "@krepis/core",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./ffi": "./mod.ts"
+  },
+  "imports": {
+    "std/": "https://deno.land/std@0.208.0/"
+  },
+  "tasks": {
+    "build": "deno cache --reload mod.ts",
+    "test": "deno test --allow-ffi --allow-read --allow-env",
+    "lint": "deno lint --allow-unsafe-ffi",
+    "fmt": "deno fmt",
+    "check": "deno check --strict mod.ts examples.ts"
+  },
+  "fmt": {
+    "semiColons": true,
+    "singleQuote": false,
+    "proseWrap": "preserve",
+    "lineWidth": 100
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "exclude": []
+    }
+  },
+  "compilerOptions": {
+    "lib": ["deno.window"],
+    "strict": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowJs": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  }
+}

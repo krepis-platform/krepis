@@ -1,0 +1,49 @@
+{
+    "name": "@krepis/knul",
+    "version": "0.1.0",
+    "exports": {
+      ".": "./adapter.ts",
+      "./adapter": "./adapter.ts",
+      "./examples": "./adapter-examples.ts"
+    },
+    "imports": {
+      "@krepis/core": "../deno-krepis-core/mod.ts",
+      "std/": "https://deno.land/std@0.208.0/"
+    },
+    "tasks": {
+      "build": "deno cache --reload adapter.ts",
+      "test": "deno test --allow-all adapter-examples.ts",
+      "examples": "deno run --allow-read --allow-env adapter-examples.ts",
+      "lint": "deno lint --allow-unsafe-ffi",
+      "fmt": "deno fmt",
+      "check": "deno check --strict adapter.ts adapter-examples.ts"
+    },
+    "fmt": {
+      "semiColons": true,
+      "singleQuote": false,
+      "proseWrap": "preserve",
+      "lineWidth": 100,
+      "indentWidth": 2
+    },
+    "lint": {
+      "rules": {
+        "tags": ["recommended"],
+        "exclude": []
+      }
+    },
+    "compilerOptions": {
+      "lib": ["deno.window"],
+      "strict": true,
+      "noImplicitAny": true,
+      "noImplicitThis": true,
+      "strictNullChecks": true,
+      "strictFunctionTypes": true,
+      "strictPropertyInitialization": true,
+      "noImplicitReturns": true,
+      "noFallthroughCasesInSwitch": true,
+      "allowJs": false,
+      "noUnusedLocals": true,
+      "noUnusedParameters": true,
+      "exactOptionalPropertyTypes": true
+    }
+  }

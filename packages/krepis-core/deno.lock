@@ -1,0 +1,10 @@
+{
+  "version": "3",
+  "redirects": {
+    "https://deno.land/x/ffi/mod.ts": "https://deno.land/x/ffi@0.4.0/mod.ts"
+  },
+  "remote": {
+    "https://deno.land/x/ffi@0.4.0/mod.ts": "c3d95acf157dba7bda638fa60d491e23a7e7ee9714499ec5fccde3aee225bd7e",
+    "https://deno.land/x/ffi@0.4.0/types.ts": "b4daab55c472090ea47b022b3893a2fed3709a470dd3bb059b2802b8d6dea95c"
+  }
+}

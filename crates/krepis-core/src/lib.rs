@@ -16,7 +16,7 @@ pub mod error;
 pub mod traits;
 
 // Re-export commonly used types
-pub use abi::{FfiBuffer, FfiResponse, FfiLockState};
+pub use abi::{FfiBuffer, FfiResponse, FfiLockState, FfiQuicConfig};
 pub use context::SovereignContext;
 pub use error::KrepisError;
 pub use traits::{SovereignRuntime, ResourceGuard};

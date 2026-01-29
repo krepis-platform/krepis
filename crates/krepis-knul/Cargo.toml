@@ -1,19 +1,63 @@
 [package]
 name = "krepis-knul"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+authors = ["Krepis Team"]
+license = "Apache-2.0"
+description = "Krepis KNUL - Network adapter layer for QUIC server management"
+repository = "https://github.com/krepis-platform/krepis"
 
 [lib]
 name = "krepis_knul"
 path = "src/lib.rs"
 
 [dependencies]
-tokio = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-quinn = { workspace = true }
-prost = { workspace = true }
-serde = { workspace = true }
-tracing = { workspace = true }
+# Core types (FFI structures, error codes)
+krepis-core = { path = "../krepis-core" }
+
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+
+# QUIC transport (0.11 is stable and well-tested)
+quinn = { version = "0.11", features = ["rustls"] }
+quinn-proto = "0.11"
+
+# Concurrent data structures
+dashmap = "5.5"
+
+# Serialization (for stats)
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+
+# TLS (rustls 0.23 is compatible with quinn 0.11)
+rustls = { version = "0.23", features = ["std"] }
+rustls-pemfile = "2.1"
+
+# Tracing/logging
+tracing = "0.1"
+
+[dev-dependencies]
+# Testing
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+
+[features]
+default = []
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Documentation settings
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
