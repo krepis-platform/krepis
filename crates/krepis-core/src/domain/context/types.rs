@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Sovereign Context: the canonical context object passed through all kernel operations
 ///
@@ -70,7 +71,6 @@ impl SovereignContext {
 
     /// Get current system timestamp in nanoseconds
     fn current_timestamp() -> u64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)

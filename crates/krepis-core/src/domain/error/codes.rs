@@ -185,9 +185,6 @@ impl fmt::Display for KrepisError {
 
 impl std::error::Error for KrepisError {}
 
-/// Krepis Result type for convenience
-pub type KrepisResult<T> = Result<T, KrepisError>;
-
 #[cfg(test)]
 mod tests {
     use super::*;

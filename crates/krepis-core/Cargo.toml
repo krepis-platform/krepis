@@ -12,6 +12,7 @@ name = "krepis_core"
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1.89"
 # Serialization
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0"

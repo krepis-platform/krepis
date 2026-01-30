@@ -1,0 +1,97 @@
+# [전략 개정안] Project Clear-Link v2.0: Phased Sovereignty
+
+**문서 번호:** KRP-STRATEGY-2026-02-01-REVISED  
+**버전:** v2.0.0 (The Pragmatic Path)  
+**작성자:** K-ACA & Founder  
+**상태:** 승인됨 (Phase 2.6 재정의)  
+**이전 버전:** Project Clear-Link v1.0 (전면 개정)
+
+---
+
+## 1. 전략 개정의 배경
+
+Project Clear-Link v1.0은 Krepis의 네트워크 주권 확보라는 명확한 비전을 제시했으나, 현재의 리소스 제약과 Phase 2 완료라는 우선순위를 고려할 때 실행 타임라인의 재조정이 필요하다고 판단되었습니다. 본 개정안은 최종 목표는 그대로 유지하되, 도달 경로를 더욱 전략적이고 단계적으로 재설계합니다.
+
+핵심 인식은 다음과 같습니다. 완벽한 QUIC 스택을 가진 미완성 플랫폼보다, quinn을 활용하되 완벽하게 통합된 작동하는 Krepis가 더 강력한 기술적 증명이 될 것입니다. 주권적 아키텍처는 포기하는 것이 아니라, 더 확실하게 달성하기 위해 경로를 최적화하는 것입니다.
+
+---
+
+## 2. 핵심 전략: Phased Sovereignty (단계적 주권 확보)
+
+### 2.1 Phase 2.6: Abstraction Barrier 구축
+
+KNUL 아키텍처에서 quinn을 "교체 가능한 부품"으로 격리하는 인터페이스 레이어를 먼저 완성합니다. TypeScript 레이어와 Kernel은 quinn의 API를 직접 참조하지 않고, Krepis가 정의한 추상화 계층만을 통해 네트워크 기능에 접근하게 됩니다.
+
+구체적 구현 요소는 다음과 같습니다. Sovereign Wrapper는 quinn의 Connection과 Endpoint를 래핑하여 KrepisContext 주입 포인트를 제공하는 어댑터 계층입니다. Transport Abstraction Interface는 상위 레이어가 의존할 트레이트 정의로, 향후 자체 QUIC 구현체가 이 인터페이스만 충족하면 플러그인처럼 교체될 수 있도록 설계됩니다. PacketQueue Standardization은 Rust와 TypeScript 간 패킷 전송에 사용되는 SPSC 큐의 메모리 레이아웃과 ABI를 명확히 문서화하여, 내부 구현이 바뀌어도 FFI 경계는 안정적으로 유지되도록 합니다.
+
+이 접근의 효과는 명확합니다. 나중에 자체 QUIC 스택이 완성되었을 때 상위 레이어의 코드 수정 없이 Transport 구현체만 교체할 수 있는 구조를 먼저 확보하게 됩니다.
+
+### 2.2 Phase 2.7: Selective Native Implementation
+
+QUIC 프로토콜 전체를 재구현하는 대신, Krepis의 성능과 결정론에 직접 영향을 미치는 핵심 컴포넌트만 선택적으로 네이티브화합니다.
+
+첫 번째 우선순위는 SIMD-Accelerated Parser입니다. RFC 9000의 패킷 헤더 파싱과 가변 길이 정수 인코딩 등 CPU 집약적인 부분을 Rust로 직접 구현하고 SIMD 명령어로 최적화합니다. 이 파서는 Kani로 메모리 안정성을 수학적으로 증명하며, quinn이 수신한 원시 바이트 배열을 전처리하는 단계에 삽입됩니다.
+
+두 번째 우선순위는 Deterministic Context Injection입니다. quinn의 이벤트 루프에서 패킷이 도착하는 시점에 KrepisContext를 주입하고, VirtualClock과 동기화하는 인터셉션 레이어를 구축합니다. 이를 통해 quinn의 내부 상태 머신을 완전히 통제하지 못하더라도, Twin 시뮬레이션에 필요한 결정론적 동작을 확보할 수 있습니다.
+
+세 번째 우선순위는 Zero-Copy Bridge Optimization입니다. 수신된 패킷이 quinn에서 Rust SPSC 큐를 거쳐 TypeScript의 UnsafePointerView까지 복사 없이 전달되도록 메모리 레이아웃을 최적화합니다. 이는 전체 QUIC 재구현보다 훨씬 적은 리소스로 핵심 성능 이득을 확보할 수 있는 영역입니다.
+
+### 2.3 Phase 2.8: Strategic Formal Verification
+
+RFC 9000 전체를 TLA+로 명세하는 대신, Krepis의 안정성과 정확성에 직결되는 핵심 불변량에만 형식 검증 리소스를 집중 투입합니다.
+
+검증 대상 1순위는 SPSC Queue Memory Safety입니다. Zero-Copy 큐에서 포인터가 고정되어 있는 동안 메모리 재할당이나 해제가 발생하지 않음을 Kani로 증명합니다. TypeScript가 UnsafePointerView로 접근하는 동안 Rust 측에서 메모리 오염이 불가능함을 수학적으로 보장하는 것입니다.
+
+검증 대상 2순위는 Tenant Isolation Invariant입니다. 멀티 테넌트 환경에서 한 테넌트의 패킷이 다른 테넌트의 메모리 영역에 접근할 수 없음을 증명합니다. 이는 Free부터 Enterprise까지 모든 플랜에서 보안성을 보장하는 핵심 속성입니다.
+
+검증 대상 3순위는 Virtual Clock Causality Preservation입니다. VirtualClock 주입 시 패킷의 인과관계 순서가 보존됨을 TLA+로 명세하고 검증합니다. 이는 Twin 시뮬레이션의 정확성을 보장하는 핵심 불변량입니다.
+
+### 2.4 Phase 4: Full Sovereignty (전역 후)
+
+Phase 2와 Phase 3를 통해 Kernel Integration과 AI Agent Orchestration을 완성하고, 실제 워크로드 데이터를 축적한 후, 확보된 성능 병목 지점과 최적화 포인트를 기반으로 완전한 Krepis-Native QUIC 엔진을 구축합니다.
+
+이 시점에서는 다음의 이점을 누릴 수 있습니다. 실제 AI 에이전트 통신 패턴을 기반으로 불필요한 QUIC 기능을 제거하고 Krepis에 최적화된 경량 프로토콜을 설계할 수 있습니다. 군 복무가 끝나 온전한 개발 환경을 확보한 상태이므로, 충분한 시간과 리소스를 투입하여 완성도 높은 구현이 가능합니다. Phase 2와 3에서 구축한 Abstraction Barrier 덕분에 상위 레이어 코드 수정 없이 Transport 구현체만 교체하면 되므로, 마이그레이션 리스크가 최소화됩니다.
+
+---
+
+## 3. 타임라인 및 마일스톤
+
+**Phase 2.6 (현재~2주):** Abstraction Barrier 완성 및 quinn 격리. 목표는 상위 레이어가 Transport 인터페이스에만 의존하도록 리팩토링하는 것입니다.
+
+**Phase 2.7 (2~4주):** SIMD Parser 구현 및 Context Injection 완성. 목표는 Zero-Copy 브릿지 최적화 및 Kani 검증을 완료하는 것입니다.
+
+**Phase 2.8 (1~2주):** 핵심 불변량 TLA+ 명세 및 검증. 목표는 SPSC 큐, Tenant Isolation, Causality 세 가지 속성을 수학적으로 증명하는 것입니다.
+
+**Phase 3 (이후):** AI Agent Orchestration 및 대규모 워크로드 테스트를 진행합니다.
+
+**Phase 4 (전역 후):** Krepis-Native QUIC 엔진 구축 및 완전한 주권 확보를 달성합니다.
+
+---
+
+## 4. 리스크 관리 및 성공 지표
+
+### 주요 리스크
+
+Abstraction Barrier의 오버헤드가 성능에 부정적 영향을 미칠 가능성이 있습니다. 이에 대한 완화 방안은 인터페이스 호출을 인라인 최적화하고, 벤치마크를 통해 오버헤드가 1% 미만임을 검증하는 것입니다.
+
+SIMD Parser 구현의 복잡도가 예상보다 높을 수 있습니다. 이에 대한 완화 방안은 초기에는 스칼라 버전으로 시작하되, SIMD 최적화는 점진적으로 적용하는 것입니다.
+
+VirtualClock 주입이 quinn의 내부 타이머와 충돌할 가능성이 있습니다. 이에 대한 완화 방안은 quinn의 소스 코드를 포크하여 필요시 타이머 로직을 수정 가능하도록 준비하는 것입니다.
+
+### 성공 지표
+
+Zero-Copy 브릿지를 통한 패킷 전송 지연이 100 나노초 이하를 달성해야 합니다. SIMD Parser가 quinn의 기본 파서 대비 2배 이상의 성능을 보여야 합니다. 핵심 3가지 불변량이 Kani 및 TLA+ 검증을 통과해야 합니다. Phase 2 완료 시 AI 에이전트 100개가 동시에 통신하는 시나리오를 Twin에서 결정론적으로 재현할 수 있어야 합니다.
+
+---
+
+## 5. 아키텍트의 최종 의견
+
+Project Clear-Link v2.0은 순수한 비전과 현실적 실행 사이의 완벽한 균형점입니다. 우리는 주권을 포기하는 것이 아니라, 더 확실하게 획득하기 위해 경로를 최적화했습니다. Quinn은 더 이상 영구적 의존성이 아니라, 우리가 필요한 순간까지만 활용할 전략적 자산입니다.
+
+Abstraction Barrier를 먼저 구축함으로써, 우리는 미래의 자유를 현재에 확보합니다. Phase 4에서 완전한 Krepis-Native QUIC 엔진이 완성되었을 때, 단 하나의 struct 구현체만 교체하면 전체 플랫폼이 완전한 주권 모드로 전환될 것입니다.
+
+이것이 진정한 엔지니어링 전략입니다. 이상을 타협하지 않으면서도, 현실의 제약 속에서 최선의 경로를 찾아내는 것. Krepis는 이 원칙 위에 세워질 것입니다.
+
+**승인 권고:** Phase 2.6 즉시 착수
+
+---

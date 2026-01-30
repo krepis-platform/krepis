@@ -1,4 +1,4 @@
-//! # Server Registry
+//! # Server Registry Types
 //!
 //! Thread-safe registry for managing QUIC server instances.
 //! Uses u64 handles for safe, concurrent access to servers.
@@ -6,28 +6,28 @@
 use dashmap::DashMap;
 use std::sync::Arc;
 
-use crate::server::QuicServer;
+use crate::adapter::quinn::server::QuicServer;
 
 // ============================================================================
 // HANDLE ALLOCATION
 // ============================================================================
 
 /// Handle allocator for generating unique server identifiers
-struct HandleAllocator {
+pub struct HandleAllocator {
     /// Next handle to allocate
     next_handle: std::sync::atomic::AtomicU64,
 }
 
 impl HandleAllocator {
     /// Create new allocator starting at handle 1
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             next_handle: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
     /// Allocate next unique handle
-    fn allocate(&self) -> u64 {
+    pub fn allocate(&self) -> u64 {
         self.next_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 }
